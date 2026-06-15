@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Dog Cam — Viewer</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: #000; color: #f2f2f2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+    }
+    body { display: flex; flex-direction: column; }
+    header {
+      padding: 14px 18px; display: flex; align-items: center; gap: 12px;
+      border-bottom: 1px solid #1c1c1e; flex: 0 0 auto;
+    }
+    header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%; background: #555; flex: 0 0 auto;
+    }
+    .dot.live { background: #30d158; animation: pulse 1.8s infinite; }
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(48,209,88,0.5); }
+      70%  { box-shadow: 0 0 0 10px rgba(48,209,88,0); }
+      100% { box-shadow: 0 0 0 0 rgba(48,209,88,0); }
+    }
+    .stage { flex: 1; position: relative; background: #000; }
+    video {
+      width: 100%; height: 100%; object-fit: contain; background: #000;
+      display: block;
+    }
+    .overlay {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 16px;
+      text-align: center; padding: 24px; pointer-events: none;
+    }
+    .overlay p { color: #9b9b9d; font-size: 15px; max-width: 320px; line-height: 1.5; }
+    .spinner {
+      width: 34px; height: 34px; border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.18); border-top-color: #0a84ff;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .tap {
+      position: absolute; inset: 0; display: flex; align-items: center;
+      justify-content: center; background: rgba(0,0,0,0.6); cursor: pointer;
+    }
+    .tap button {
+      appearance: none; border: none; border-radius: 14px;
+      background: #0a84ff; color: #fff; font-size: 16px; font-weight: 600;
+      padding: 14px 26px;
+    }
+    .statusbar {
+      position: absolute; top: 0; left: 0; right: 0; padding: 10px 18px;
+      font-size: 13px; color: #d0d0d0;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+      pointer-events: none;
+    }
+    .hidden { display: none !important; }
+    .err { color: #ff453a; font-size: 14px; max-width: 320px; }
+  </style>
+</head>
+<body>
+  <header>
+    <span id="statusDot" class="dot"></span>
+    <h1>Dog Cam · Live</h1>
+  </header>
+
+  <div class="stage">
+    <video id="remote" autoplay playsinline></video>
+
+    <div class="statusbar" id="statusbar">Connecting…</div>
+
+    <div class="overlay" id="waitOverlay">
+      <div class="spinner"></div>
+      <p id="waitText">Connecting to the camera…</p>
+      <div id="errText" class="err"></div>
+    </div>
+
+    <!-- iOS requires a user gesture before audio can play; this catches the
+         case where autoplay-with-sound is blocked. -->
+    <div class="tap hidden" id="tapOverlay">
+      <button>Tap to start audio</button>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    const RTC_CONFIG = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    };
+
+    // Read the shared secret from this page's URL and reuse it for the socket.
+    const params = new URLSearchParams(location.search);
+    const secret = params.get('secret') || '';
+
+    // ---- State ------------------------------------------------------------
+    let ws = null;
+    let myId = null;
+    let pc = null;            // Single connection — to the one camera.
+    let cameraId = null;      // The camera's UUID (learned from its offer).
+    const pendingCandidates = []; // ICE buffered until remoteDescription set.
+
+    // ---- DOM --------------------------------------------------------------
+    const remote = document.getElementById('remote');
+    const statusDot = document.getElementById('statusDot');
+    const statusbar = document.getElementById('statusbar');
+    const waitOverlay = document.getElementById('waitOverlay');
+    const waitText = document.getElementById('waitText');
+    const errText = document.getElementById('errText');
+    const tapOverlay = document.getElementById('tapOverlay');
+
+    function setStatus(text, live) {
+      statusbar.textContent = text;
+      statusDot.classList.toggle('live', !!live);
+    }
+
+    function signal(obj) {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    }
+
+    // ---- Memory management ------------------------------------------------
+    // Cleanly drop the current peer connection and any buffered candidates.
+    // Called when the camera leaves or the connection fails, so the viewer can
+    // re-negotiate from scratch without leaking the old RTCPeerConnection.
+    function closePeer() {
+      if (pc) {
+        try { pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = null; } catch (_e) {}
+        try { pc.close(); } catch (_e) {}
+        pc = null;
+      }
+      cameraId = null;
+      pendingCandidates.length = 0;
+      remote.srcObject = null;
+    }
+
+    // ---- Handle an incoming offer from the camera -------------------------
+    async function handleOffer(fromId, sdp) {
+      // If we already had a connection, tear it down first (camera restarted).
+      closePeer();
+      cameraId = fromId;
+
+      pc = new RTCPeerConnection(RTC_CONFIG);
+
+      // Incoming media tracks from the camera get attached to our <video>.
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          remote.srcObject = event.streams[0];
+        } else {
+          // Fallback: assemble a stream from individual tracks.
+          let s = remote.srcObject;
+          if (!s) { s = new MediaStream(); remote.srcObject = s; }
+          s.addTrack(event.track);
+        }
+        waitOverlay.classList.add('hidden');
+        setStatus('Live', true);
+        tryPlay();
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          signal({ type: 'ice-candidate', targetId: cameraId, candidate: event.candidate });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+          setStatus('Camera connection lost', false);
+          waitOverlay.classList.remove('hidden');
+          waitText.textContent = 'Reconnecting to the camera…';
+        }
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+      // Flush ICE candidates that arrived before we set the remote description.
+      for (const c of pendingCandidates) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_e) {}
+      }
+      pendingCandidates.length = 0;
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      signal({ type: 'answer', targetId: cameraId, sdp: pc.localDescription });
+    }
+
+    // ---- Autoplay handling ------------------------------------------------
+    function tryPlay() {
+      const p = remote.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => {
+          // Autoplay with audio was blocked — show a tap-to-start prompt.
+          tapOverlay.classList.remove('hidden');
+        });
+      }
+    }
+
+    tapOverlay.addEventListener('click', () => {
+      tapOverlay.classList.add('hidden');
+      remote.play().catch(() => {});
+    });
+
+    // ---- WebSocket wiring --------------------------------------------------
+    function connectSocket() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/?secret=${encodeURIComponent(secret)}`);
+
+      ws.onopen = () => {
+        setStatus('Waiting for camera…', false);
+        // Announce ourselves so the camera opens a connection to us.
+        signal({ type: 'viewer-joined' });
+      };
+
+      ws.onclose = () => {
+        setStatus('Disconnected', false);
+        closePeer();
+        setTimeout(connectSocket, 2000);
+      };
+
+      ws.onerror = () => setStatus('Connection error', false);
+
+      ws.onmessage = async (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch (_e) { return; }
+
+        switch (msg.type) {
+          case 'welcome':
+            myId = msg.id;
+            break;
+
+          case 'offer':
+            await handleOffer(msg.from, msg.sdp);
+            break;
+
+          case 'ice-candidate':
+            if (!msg.candidate) return;
+            if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (_e) {}
+            } else {
+              pendingCandidates.push(msg.candidate);
+            }
+            break;
+
+          // The camera went away — clean up and wait for it to return.
+          case 'peer-left':
+            if (msg.from === cameraId) {
+              closePeer();
+              setStatus('Camera offline', false);
+              waitOverlay.classList.remove('hidden');
+              waitText.textContent = 'Camera is offline. Waiting…';
+              // Re-announce so we get a fresh offer when the camera is back.
+              signal({ type: 'viewer-joined' });
+            }
+            break;
+        }
+      };
+    }
+
+    window.addEventListener('pagehide', () => {
+      closePeer();
+      if (ws) try { ws.close(); } catch (_e) {}
+    });
+
+    if (!secret) {
+      waitOverlay.classList.remove('hidden');
+      waitText.textContent = '';
+      errText.textContent = 'Missing ?secret= token in the URL.';
+    } else {
+      connectSocket();
+    }
+  })();
+  </script>
+</body>
+</html>

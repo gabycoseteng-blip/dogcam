@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Dog Cam — Transmitter (iPad)</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #000;
+      color: #f2f2f2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    body { display: flex; flex-direction: column; }
+    header {
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid #1c1c1e;
+    }
+    header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #555; flex: 0 0 auto;
+      box-shadow: 0 0 0 0 rgba(48,209,88,0.6);
+    }
+    .dot.live { background: #30d158; animation: pulse 1.8s infinite; }
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(48,209,88,0.5); }
+      70%  { box-shadow: 0 0 0 10px rgba(48,209,88,0); }
+      100% { box-shadow: 0 0 0 0 rgba(48,209,88,0); }
+    }
+    .stage {
+      flex: 1; position: relative; display: flex;
+      align-items: center; justify-content: center; overflow: hidden;
+    }
+    video {
+      width: 100%; height: 100%; object-fit: cover;
+      background: #000; transform: scaleX(1);
+    }
+    .meta {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 14px 18px;
+      background: linear-gradient(to top, rgba(0,0,0,0.75), transparent);
+      display: flex; justify-content: space-between; align-items: flex-end;
+      font-size: 13px; color: #d0d0d0; pointer-events: none;
+    }
+    .viewers { display: flex; gap: 6px; }
+    .badge {
+      background: rgba(255,255,255,0.12); border-radius: 999px;
+      padding: 3px 10px; font-size: 12px;
+    }
+    .start-overlay {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 18px;
+      background: #000; text-align: center; padding: 24px;
+    }
+    .start-overlay p { max-width: 320px; color: #9b9b9d; font-size: 14px; line-height: 1.5; }
+    button {
+      appearance: none; border: none; border-radius: 14px;
+      background: #0a84ff; color: #fff; font-size: 16px; font-weight: 600;
+      padding: 14px 26px; cursor: pointer;
+    }
+    button:active { transform: scale(0.98); }
+    .hidden { display: none !important; }
+    .err { color: #ff453a; font-size: 13px; max-width: 320px; }
+  </style>
+</head>
+<body>
+  <header>
+    <span id="statusDot" class="dot"></span>
+    <h1>Dog Cam · Transmitter</h1>
+  </header>
+
+  <div class="stage">
+    <video id="preview" autoplay playsinline muted></video>
+
+    <div id="meta" class="meta hidden">
+      <span id="statusText">Connecting…</span>
+      <span class="viewers" id="viewers"></span>
+    </div>
+
+    <div id="startOverlay" class="start-overlay">
+      <p>Point this iPad at your dog and tap below. It will use the back
+         camera and microphone and stream to your phones.</p>
+      <button id="startBtn">Start Camera</button>
+      <div id="startErr" class="err"></div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // ---- Config -----------------------------------------------------------
+    // WebRTC uses Google's public STUN server only (no TURN); fine for most
+    // home networks where the phones and iPad can reach each other directly.
+    const RTC_CONFIG = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    };
+
+    // Hard cap: this camera streams to at most two phones simultaneously.
+    const MAX_VIEWERS = 2;
+
+    // The shared secret is read from THIS page's own URL query string and
+    // reused to authenticate the WebSocket. Serving the page already required
+    // knowing the URL; we simply forward the same token to the socket layer.
+    const params = new URLSearchParams(location.search);
+    const secret = params.get('secret') || '';
+
+    // ---- State ------------------------------------------------------------
+    let ws = null;
+    let myId = null;          // UUID assigned by the server.
+    let localStream = null;   // The single camera+mic stream, shared to all peers.
+
+    // The required mapping: phone UUID -> its dedicated RTCPeerConnection.
+    // Each phone gets an independent connection so streams run concurrently.
+    const peers = Object.create(null);
+
+    // Buffer ICE candidates that arrive before remoteDescription is set,
+    // keyed by phoneId, so none are dropped during negotiation.
+    const pendingCandidates = Object.create(null);
+
+    // ---- DOM --------------------------------------------------------------
+    const preview = document.getElementById('preview');
+    const startOverlay = document.getElementById('startOverlay');
+    const startBtn = document.getElementById('startBtn');
+    const startErr = document.getElementById('startErr');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const meta = document.getElementById('meta');
+    const viewersEl = document.getElementById('viewers');
+
+    function setStatus(text, live) {
+      statusText.textContent = text;
+      statusDot.classList.toggle('live', !!live);
+    }
+
+    function renderViewers() {
+      const ids = Object.keys(peers);
+      viewersEl.innerHTML = '';
+      if (ids.length === 0) {
+        const b = document.createElement('span');
+        b.className = 'badge';
+        b.textContent = 'No viewers';
+        viewersEl.appendChild(b);
+        return;
+      }
+      ids.forEach((id, i) => {
+        const b = document.createElement('span');
+        b.className = 'badge';
+        b.textContent = 'Phone ' + (i + 1);
+        viewersEl.appendChild(b);
+      });
+    }
+
+    // ---- Signaling helpers ------------------------------------------------
+    function signal(obj) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
+      }
+    }
+
+    // ---- Per-viewer peer connection ---------------------------------------
+    // Build a fresh RTCPeerConnection for a specific phone, push the local
+    // media tracks onto it, and create + send an SDP offer addressed to that
+    // phone's id. Because every phone has its own connection object, the iPad
+    // can transmit to both phones at once without interference.
+    async function createPeerForViewer(phoneId) {
+      if (peers[phoneId]) return; // Already connected to this phone.
+
+      if (Object.keys(peers).length >= MAX_VIEWERS) {
+        console.warn('Viewer limit reached; ignoring', phoneId);
+        return;
+      }
+
+      const pc = new RTCPeerConnection(RTC_CONFIG);
+      peers[phoneId] = pc;
+      pendingCandidates[phoneId] = [];
+
+      // Attach every local track (back-camera video + microphone audio).
+      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+      // Trickle our ICE candidates to this specific phone as they appear.
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          signal({ type: 'ice-candidate', targetId: phoneId, candidate: event.candidate });
+        }
+      };
+
+      // If the connection dies (phone out of range, network drop), tear it
+      // down proactively so we don't leak a dead RTCPeerConnection.
+      pc.onconnectionstatechange = () => {
+        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+          closePeer(phoneId);
+        }
+      };
+
+      // Offer/answer handshake — the camera is always the offerer.
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      signal({ type: 'offer', targetId: phoneId, sdp: pc.localDescription });
+
+      renderViewers();
+    }
+
+    // ---- Memory management ------------------------------------------------
+    // Closing a peer is the critical cleanup path. We:
+    //   1. Stop the RTCPeerConnection (frees native transport + encoder slots).
+    //   2. Delete it from the `peers` map so the object can be garbage
+    //      collected and the viewer slot is freed for a future phone.
+    //   3. Drop any buffered ICE candidates for that phone.
+    // The local camera/mic stream is intentionally NOT stopped here — it is
+    // shared across all viewers and must keep running for the others.
+    function closePeer(phoneId) {
+      const pc = peers[phoneId];
+      if (pc) {
+        try { pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = null; } catch (_e) {}
+        try { pc.close(); } catch (_e) {}
+        delete peers[phoneId];
+      }
+      delete pendingCandidates[phoneId];
+      renderViewers();
+    }
+
+    // ---- WebSocket wiring --------------------------------------------------
+    function connectSocket() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/?secret=${encodeURIComponent(secret)}`);
+
+      ws.onopen = () => setStatus('Live — waiting for phones', true);
+
+      ws.onclose = () => {
+        setStatus('Disconnected', false);
+        // The signaling channel is gone; existing P2P streams may persist
+        // briefly but no new viewers can negotiate. Try to reconnect.
+        setTimeout(connectSocket, 2000);
+      };
+
+      ws.onerror = () => setStatus('Connection error', false);
+
+      ws.onmessage = async (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch (_e) { return; }
+
+        switch (msg.type) {
+          case 'welcome':
+            myId = msg.id;
+            // Announce that the camera is online (informational for the server).
+            signal({ type: 'camera-ready' });
+            break;
+
+          // A phone joined: open a dedicated connection and offer to it.
+          case 'viewer-joined':
+            await createPeerForViewer(msg.from);
+            break;
+
+          // The phone answered our offer.
+          case 'answer': {
+            const pc = peers[msg.from];
+            if (!pc) return;
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            // Flush any ICE candidates that arrived early.
+            const queued = pendingCandidates[msg.from] || [];
+            for (const c of queued) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_e) {}
+            }
+            pendingCandidates[msg.from] = [];
+            break;
+          }
+
+          // Trickled ICE from the phone.
+          case 'ice-candidate': {
+            const pc = peers[msg.from];
+            if (!pc || !msg.candidate) return;
+            if (pc.remoteDescription && pc.remoteDescription.type) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch (_e) {}
+            } else {
+              (pendingCandidates[msg.from] = pendingCandidates[msg.from] || []).push(msg.candidate);
+            }
+            break;
+          }
+
+          // A peer disconnected (reported by the server). If it was one of our
+          // viewers, release its connection and free the slot.
+          case 'peer-left':
+            if (peers[msg.from]) closePeer(msg.from);
+            break;
+        }
+      };
+    }
+
+    // ---- Start flow -------------------------------------------------------
+    async function start() {
+      startErr.textContent = '';
+      try {
+        // Request the BACK camera (environment) plus microphone audio.
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: true,
+        });
+      } catch (err) {
+        startErr.textContent = 'Could not access camera/microphone: ' + err.message;
+        return;
+      }
+
+      preview.srcObject = localStream;
+      startOverlay.classList.add('hidden');
+      meta.classList.remove('hidden');
+      renderViewers();
+      connectSocket();
+    }
+
+    startBtn.addEventListener('click', start);
+
+    // Belt-and-suspenders cleanup: close all peer connections if the page is
+    // unloaded so we don't leave half-open transports on mobile Safari.
+    window.addEventListener('pagehide', () => {
+      Object.keys(peers).forEach(closePeer);
+      if (ws) try { ws.close(); } catch (_e) {}
+    });
+
+    if (!secret) {
+      startErr.textContent = 'Missing ?secret= token in the URL.';
+      startBtn.disabled = true;
+    }
+  })();
+  </script>
+</body>
+</html>

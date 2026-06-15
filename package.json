@@ -1,0 +1,17 @@
+{
+  "name": "dogcam",
+  "version": "1.0.0",
+  "description": "Secure minimal multi-client dog monitoring system (iPad camera -> up to two phone viewers) using WebRTC mesh signaling over WebSockets.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}
