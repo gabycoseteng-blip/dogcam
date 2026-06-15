@@ -1,0 +1,93 @@
+# 🐶 Dog Cam
+
+A secure, minimal multi-client dog monitoring system. One stationary **iPad**
+acts as the camera and streams **live back-camera video + microphone audio**
+peer-to-peer to **up to two phones** at once. The Node.js server only brokers
+the WebRTC handshake — it never sees or stores any media.
+
+## Architecture
+
+```
+                 ┌───────────────────────────┐
+                 │  Node.js server (port 3000)│
+                 │  • Express static files    │
+                 │  • ws signaling relay       │
+                 │  • secret-token auth        │
+                 └─────────────┬──────────────┘
+            signaling (WS)     │     signaling (WS)
+        ┌──────────────────────┴──────────────────────┐
+        │                                              │
+   ┌────▼─────┐         WebRTC media (P2P)        ┌────▼─────┐
+   │  iPad    │ ───────────────────────────────► │ Phone 1  │
+   │ (camera) │ ───────────────────────────────► │ Phone 2  │
+   └──────────┘                                   └──────────┘
+```
+
+- **Mesh signaling:** every client gets a server-assigned UUID. SDP offers,
+  answers and ICE candidates are routed only to the explicit `targetId`.
+- **Per-viewer connections:** the iPad keeps an object mapping each phone's id
+  to its own `RTCPeerConnection`, so both phones receive the stream
+  concurrently and independently.
+- **Media is peer-to-peer:** only signaling passes through the server. STUN is
+  the public Google server `stun:stun.l.google.com:19302`.
+
+## Security
+
+Every WebSocket connection must present the shared secret as a query parameter:
+
+```
+ws://<host>/?secret=MySuperSecretToken123
+```
+
+The token is validated **during the HTTP upgrade handshake** using a
+constant-time comparison; connections without the correct token are rejected
+with `401` before any signaling occurs. Configure it via the `STREAM_SECRET`
+environment variable (it falls back to `MySuperSecretToken123`).
+
+> Note: a query-string secret is only as private as the transport. Run behind
+> HTTPS/WSS in any real deployment so the token isn't sent in the clear.
+
+## Running
+
+```bash
+npm install
+STREAM_SECRET=MySuperSecretToken123 npm start
+```
+
+Then open:
+
+- **iPad (camera):** `http://<server-ip>:3000/camera.html?secret=MySuperSecretToken123`
+- **Phones (viewers):** `http://<server-ip>:3000/?secret=MySuperSecretToken123`
+
+> Browsers only grant camera/microphone access on `localhost` or over HTTPS.
+> For real devices on your LAN, terminate TLS (e.g. behind a reverse proxy or
+> a tunneling tool) so `getUserMedia` is permitted.
+
+### Watching over cellular / from outside the house
+
+See **[SETUP.md](./SETUP.md)** for a click-by-click guide using Tailscale (free,
+private, recommended for a personal "just me" dog cam).
+
+### Configuration (environment variables)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `STREAM_SECRET` | `MySuperSecretToken123` | Shared secret required on every connection. |
+| `PORT` | `3000` | HTTP/WebSocket port. |
+| `HOST` | `0.0.0.0` | Bind address (all interfaces, so the LAN/VPN can reach it). |
+| `TURN_URL` | — | Optional TURN relay URL, e.g. `turn:host:3478`. Needed for cellular **without** a VPN. |
+| `TURN_USERNAME` | — | TURN username (if `TURN_URL` set). |
+| `TURN_CREDENTIAL` | — | TURN password (if `TURN_URL` set). |
+
+The clients fetch their ICE/TURN list from the authenticated `/ice-config`
+endpoint at startup, so STUN/TURN setup lives only in the server's environment.
+
+## Memory management
+
+- When a phone disconnects, the server removes its UUID from the registry and
+  broadcasts `peer-left`. The iPad receives it, calls `closePeer(phoneId)`
+  which closes the `RTCPeerConnection`, nulls its event handlers, deletes it
+  from the `peers` map and drops buffered ICE candidates — freeing the slot for
+  a new viewer. The shared camera stream keeps running for remaining viewers.
+- `connectionstatechange` also triggers cleanup if a peer fails silently.
+- `pagehide` closes all connections when a tab is backgrounded/closed on iOS.
