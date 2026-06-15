@@ -92,13 +92,28 @@
   (function () {
     'use strict';
 
-    const RTC_CONFIG = {
+    // ICE servers are fetched from the server (/ice-config); we keep a Google
+    // STUN fallback so the page still works if the fetch fails. loadIceConfig()
+    // upgrades it with any TURN relay the server has configured.
+    let RTC_CONFIG = {
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     };
 
     // Read the shared secret from this page's URL and reuse it for the socket.
     const params = new URLSearchParams(location.search);
     const secret = params.get('secret') || '';
+
+    async function loadIceConfig() {
+      try {
+        const res = await fetch('/ice-config?secret=' + encodeURIComponent(secret));
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.iceServers) && data.iceServers.length) {
+            RTC_CONFIG = { iceServers: data.iceServers };
+          }
+        }
+      } catch (_e) { /* keep the STUN fallback */ }
+    }
 
     // ---- State ------------------------------------------------------------
     let ws = null;
@@ -272,7 +287,8 @@
       waitText.textContent = '';
       errText.textContent = 'Missing ?secret= token in the URL.';
     } else {
-      connectSocket();
+      // Fetch ICE/TURN config first, then connect and announce ourselves.
+      loadIceConfig().then(connectSocket);
     }
   })();
   </script>

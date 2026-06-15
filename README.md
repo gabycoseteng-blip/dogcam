@@ -63,6 +63,25 @@ Then open:
 > For real devices on your LAN, terminate TLS (e.g. behind a reverse proxy or
 > a tunneling tool) so `getUserMedia` is permitted.
 
+### Watching over cellular / from outside the house
+
+See **[SETUP.md](./SETUP.md)** for a click-by-click guide using Tailscale (free,
+private, recommended for a personal "just me" dog cam).
+
+### Configuration (environment variables)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `STREAM_SECRET` | `MySuperSecretToken123` | Shared secret required on every connection. |
+| `PORT` | `3000` | HTTP/WebSocket port. |
+| `HOST` | `0.0.0.0` | Bind address (all interfaces, so the LAN/VPN can reach it). |
+| `TURN_URL` | — | Optional TURN relay URL, e.g. `turn:host:3478`. Needed for cellular **without** a VPN. |
+| `TURN_USERNAME` | — | TURN username (if `TURN_URL` set). |
+| `TURN_CREDENTIAL` | — | TURN password (if `TURN_URL` set). |
+
+The clients fetch their ICE/TURN list from the authenticated `/ice-config`
+endpoint at startup, so STUN/TURN setup lives only in the server's environment.
+
 ## Memory management
 
 - When a phone disconnects, the server removes its UUID from the registry and

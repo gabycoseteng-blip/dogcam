@@ -98,11 +98,25 @@
     'use strict';
 
     // ---- Config -----------------------------------------------------------
-    // WebRTC uses Google's public STUN server only (no TURN); fine for most
-    // home networks where the phones and iPad can reach each other directly.
-    const RTC_CONFIG = {
+    // ICE servers are fetched from the server (/ice-config) so STUN/TURN setup
+    // lives in one place. We start with a Google STUN fallback so the page
+    // still works if the fetch fails; loadIceConfig() upgrades it if the server
+    // has a TURN relay configured (needed for cellular without a VPN).
+    let RTC_CONFIG = {
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     };
+
+    async function loadIceConfig() {
+      try {
+        const res = await fetch('/ice-config?secret=' + encodeURIComponent(secret));
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.iceServers) && data.iceServers.length) {
+            RTC_CONFIG = { iceServers: data.iceServers };
+          }
+        }
+      } catch (_e) { /* keep the STUN fallback */ }
+    }
 
     // Hard cap: this camera streams to at most two phones simultaneously.
     const MAX_VIEWERS = 2;
@@ -313,6 +327,9 @@
       startOverlay.classList.add('hidden');
       meta.classList.remove('hidden');
       renderViewers();
+      // Pull ICE/TURN config before opening the socket so the first offers use
+      // the right servers.
+      await loadIceConfig();
       connectSocket();
     }
 

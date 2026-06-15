@@ -36,6 +36,35 @@ const STREAM_SECRET = process.env.STREAM_SECRET || 'MySuperSecretToken123';
 
 const PORT = process.env.PORT || 3000;
 
+// Bind to all network interfaces by default (0.0.0.0) rather than just
+// loopback, so the server is reachable over the LAN / Tailscale hostname and
+// not only from the machine it runs on. Override with HOST if you want to
+// restrict it.
+const HOST = process.env.HOST || '0.0.0.0';
+
+// ---------------------------------------------------------------------------
+// WebRTC ICE configuration
+// ---------------------------------------------------------------------------
+// The browsers need a list of ICE servers to negotiate a peer-to-peer path.
+// Google's public STUN server is always included and is enough on the same
+// network or over a VPN like Tailscale. For viewing over cellular WITHOUT a
+// VPN you usually also need a TURN relay (cellular carriers use symmetric NAT
+// that STUN can't traverse) — supply it via env vars and it gets handed to the
+// clients automatically. With Tailscale you can leave the TURN vars unset.
+function buildIceServers() {
+  const servers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  if (process.env.TURN_URL) {
+    servers.push({
+      urls: process.env.TURN_URL, // e.g. turn:turn.example.com:3478
+      username: process.env.TURN_USERNAME || '',
+      credential: process.env.TURN_CREDENTIAL || '',
+    });
+  }
+  return servers;
+}
+
+const ICE_SERVERS = buildIceServers();
+
 // ---------------------------------------------------------------------------
 // Express — static asset serving
 // ---------------------------------------------------------------------------
@@ -48,6 +77,17 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // A tiny health endpoint that is handy for uptime checks / load balancers.
 app.get('/healthz', (_req, res) => res.json({ ok: true, clients: clients.size }));
+
+// The clients fetch their ICE/TURN configuration from here at startup so the
+// STUN/TURN setup lives in one place (the server env) instead of being
+// hardcoded in each HTML file. Requires the same shared secret so TURN
+// credentials are never handed to an unauthenticated caller.
+app.get('/ice-config', (req, res) => {
+  if (!isValidSecret(req.query.secret)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  res.json({ iceServers: ICE_SERVERS });
+});
 
 const server = http.createServer(app);
 
@@ -207,8 +247,13 @@ wss.on('connection', (ws) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Dog monitor signaling server listening on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Dog monitor signaling server listening on ${HOST}:${PORT}`);
   console.log(`  Phone viewers : http://localhost:${PORT}/?secret=${STREAM_SECRET}`);
   console.log(`  iPad camera   : http://localhost:${PORT}/camera.html?secret=${STREAM_SECRET}`);
+  if (ICE_SERVERS.length > 1) {
+    console.log('  TURN relay    : configured (cellular without VPN supported)');
+  } else {
+    console.log('  TURN relay    : none (use same network or a VPN like Tailscale)');
+  }
 });
