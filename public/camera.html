@@ -327,11 +327,41 @@
       startOverlay.classList.add('hidden');
       meta.classList.remove('hidden');
       renderViewers();
+      // Keep the iPad screen awake so Safari isn't suspended and the stream
+      // doesn't freeze when the device would normally auto-lock.
+      requestWakeLock();
       // Pull ICE/TURN config before opening the socket so the first offers use
       // the right servers.
       await loadIceConfig();
       connectSocket();
     }
+
+    // ---- Keep-awake (Screen Wake Lock) ------------------------------------
+    // A stationary camera is useless if the iPad sleeps. We request a screen
+    // wake lock while streaming. iOS releases the lock whenever the tab is
+    // backgrounded, so we re-acquire it on the next 'visibilitychange'. The
+    // API isn't on every browser, so every call is guarded.
+    let wakeLock = null;
+    async function requestWakeLock() {
+      if (!('wakeLock' in navigator)) return;
+      try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        // If the system drops the lock, forget our handle so we re-request it.
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } catch (_e) {
+        // Denied (e.g. low battery) — not fatal; the stream still runs.
+        wakeLock = null;
+      }
+    }
+
+    // When the page comes back to the foreground, re-arm the wake lock and,
+    // if the signaling socket dropped while backgrounded, reconnect right away
+    // instead of waiting for the periodic retry.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (localStream && !wakeLock) requestWakeLock();
+      if (localStream && (!ws || ws.readyState === WebSocket.CLOSED)) connectSocket();
+    });
 
     startBtn.addEventListener('click', start);
 
@@ -340,6 +370,7 @@
     window.addEventListener('pagehide', () => {
       Object.keys(peers).forEach(closePeer);
       if (ws) try { ws.close(); } catch (_e) {}
+      if (wakeLock) try { wakeLock.release(); } catch (_e) {} finally { wakeLock = null; }
     });
 
     if (!secret) {
