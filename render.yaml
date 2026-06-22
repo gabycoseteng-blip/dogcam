@@ -32,3 +32,12 @@ services:
         sync: false
       - key: TURN_CREDENTIAL
         sync: false
+      # Cloudflare Realtime TURN (recommended for cellular). Instead of a static
+      # username/password, the server mints short-lived credentials on demand,
+      # so you only set the Turn Token ID and an API token here. Cloudflare's
+      # free allowance (1,000 GB/month) is far larger than typical free TURN
+      # tiers. If these are set they're used in addition to the static TURN_* vars.
+      - key: CF_TURN_TOKEN_ID
+        sync: false
+      - key: CF_TURN_API_TOKEN
+        sync: false
