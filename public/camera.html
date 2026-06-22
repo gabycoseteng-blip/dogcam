@@ -2,9 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Dog Cam — Transmitter (iPad)</title>
+  <!-- Install-to-home-screen / standalone "app" behaviour. -->
+  <link rel="manifest" href="/manifest-camera.webmanifest" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dog Cam Cam" />
+  <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+  <link rel="icon" href="/icons/icon-192.png" />
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -107,6 +115,12 @@
     }
     button.primary:active { transform: scale(0.98); }
     .err { color: #ff453a; font-size: 13px; max-width: 340px; }
+    .setup { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 320px; }
+    .setup input {
+      appearance: none; border: 1px solid #2c2c2e; border-radius: 12px;
+      background: #1c1c1e; color: #fff; font-size: 16px; padding: 13px 14px;
+      width: 100%; text-align: center;
+    }
 
     /* ---- Streaming overlay ------------------------------------------------ */
     .meta {
@@ -224,6 +238,14 @@
 
       <div id="schedStatus" class="sched-status"></div>
 
+      <!-- First run on this device with no saved code: ask for it once. -->
+      <div id="setupRow" class="setup hidden">
+        <input id="secretInput" type="password" inputmode="text"
+               autocomplete="off" autocapitalize="off" spellcheck="false"
+               placeholder="Enter access code" />
+        <button id="saveSecretBtn" class="primary">Save &amp; continue</button>
+      </div>
+
       <button id="startBtn" class="primary">Start Camera</button>
       <div id="startErr" class="err"></div>
     </div>
@@ -275,8 +297,24 @@
     // ---- Config -----------------------------------------------------------
     let RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-    const params = new URLSearchParams(location.search);
-    const secret = params.get('secret') || '';
+    // The shared secret authenticates the WebSocket. It can arrive once via the
+    // URL (?secret=…); we then persist it to localStorage and strip it from the
+    // address bar, so afterwards just opening the app / home-screen icon works
+    // with no token in the URL. If it's still missing, we prompt for it once.
+    const SECRET_KEY = 'dogcam_secret';
+    function readSecret() {
+      const params = new URLSearchParams(location.search);
+      const fromUrl = params.get('secret');
+      if (fromUrl) {
+        try { localStorage.setItem(SECRET_KEY, fromUrl); } catch (_e) {}
+        params.delete('secret');
+        const clean = location.pathname + (params.toString() ? '?' + params : '') + location.hash;
+        try { history.replaceState(null, '', clean); } catch (_e) {}
+        return fromUrl;
+      }
+      try { return localStorage.getItem(SECRET_KEY) || ''; } catch (_e) { return ''; }
+    }
+    let secret = readSecret();
 
     // At most two phones at once.
     const MAX_VIEWERS = 2;
@@ -848,11 +886,33 @@
       if (wakeLock) try { wakeLock.release(); } catch (_e) {} finally { wakeLock = null; }
     });
 
+    // ---- First-run secret prompt ------------------------------------------
+    const setupRow = document.getElementById('setupRow');
+    const secretInput = document.getElementById('secretInput');
+    const saveSecretBtn = document.getElementById('saveSecretBtn');
+
+    function saveSecret() {
+      const v = secretInput.value.trim();
+      if (!v) return;
+      try { localStorage.setItem(SECRET_KEY, v); } catch (_e) {}
+      secret = v;
+      setupRow.classList.add('hidden');
+      startBtn.classList.remove('hidden');
+      boot();
+    }
+    saveSecretBtn.addEventListener('click', saveSecret);
+    secretInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSecret(); });
+
     // ---- Boot -------------------------------------------------------------
-    if (!secret) {
-      startErr.textContent = 'Missing ?secret= token in the URL.';
-      startBtn.disabled = true;
-    } else {
+    // Bring the dashboard to life: clock, live trains, the schedule control
+    // loop, the screen wake lock and the signaling socket. The camera itself
+    // stays off until a manual tap or a scheduled window — opening the app just
+    // shows the dashboard. Runs once we have an access code.
+    let booted = false;
+    function boot() {
+      if (booted) return;
+      booted = true;
+
       tickClock();
       setInterval(tickClock, 1000);
 
@@ -862,10 +922,22 @@
       setInterval(renderTrains, 5000);  // recompute countdowns between fetches
 
       updateScheduleStatus();
+      scheduleTick();                   // start immediately if already in a window
       setInterval(scheduleTick, 10000); // schedule control loop
 
       requestWakeLock();
       loadIceConfig().then(connectSocket);
+    }
+
+    if (!secret) {
+      // First run on this device with no saved code: ask for it once. The
+      // dashboard's clock/trains come up after the code is entered.
+      setupRow.classList.remove('hidden');
+      startBtn.classList.add('hidden');
+      tickClock();
+      setInterval(tickClock, 1000);
+    } else {
+      boot();
     }
   })();
   </script>

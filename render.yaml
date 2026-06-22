@@ -1,0 +1,34 @@
+# Render Blueprint for the Dog Cam signaling server.
+# https://render.com/docs/blueprint-spec
+#
+# This hosts the tiny WebRTC signaling broker in the cloud so you do NOT need an
+# always-on computer at home — just the iPad (camera) and your phone (viewer).
+# Render serves it over HTTPS automatically on a *.onrender.com domain, which is
+# what the iPad's browser requires before it will grant camera access.
+#
+# Media still flows peer-to-peer (iPad -> phone); this server only brokers the
+# handshake. To watch over cellular, fill in the TURN_* variables (see SETUP.md).
+services:
+  - type: web
+    name: dogcam
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      # The shared password required on every link. Render generates a strong
+      # random value on first deploy — copy it from the Render dashboard
+      # (Environment tab) into your camera/viewer URLs as ?secret=...
+      - key: STREAM_SECRET
+        generateValue: true
+      # TURN relay for watching over cellular. Leave blank if you only ever
+      # watch on the same wifi. Get these from a managed TURN provider such as
+      # Metered (free tier). TURN_URL accepts a comma-separated list so you can
+      # advertise UDP, TCP and TLS/443 transports at once — see SETUP.md.
+      - key: TURN_URL
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false

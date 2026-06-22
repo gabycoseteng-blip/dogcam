@@ -65,13 +65,13 @@ can power a different stop.
 Every WebSocket connection must present the shared secret as a query parameter:
 
 ```
-ws://<host>/?secret=MySuperSecretToken123
+ws://<host>/?secret=CleoCam
 ```
 
 The token is validated **during the HTTP upgrade handshake** using a
 constant-time comparison; connections without the correct token are rejected
 with `401` before any signaling occurs. Configure it via the `STREAM_SECRET`
-environment variable (it falls back to `MySuperSecretToken123`).
+environment variable (it falls back to `CleoCam`).
 
 > Note: a query-string secret is only as private as the transport. Run behind
 > HTTPS/WSS in any real deployment so the token isn't sent in the clear.
@@ -80,31 +80,47 @@ environment variable (it falls back to `MySuperSecretToken123`).
 
 ```bash
 npm install
-STREAM_SECRET=MySuperSecretToken123 npm start
+STREAM_SECRET=CleoCam npm start
 ```
 
 Then open:
 
-- **iPad (camera):** `http://<server-ip>:3000/camera.html?secret=MySuperSecretToken123`
-- **Phones (viewers):** `http://<server-ip>:3000/?secret=MySuperSecretToken123`
+- **iPad (camera):** `http://<server-ip>:3000/camera.html?secret=CleoCam`
+- **Phones (viewers):** `http://<server-ip>:3000/?secret=CleoCam`
 
 > Browsers only grant camera/microphone access on `localhost` or over HTTPS.
 > For real devices on your LAN, terminate TLS (e.g. behind a reverse proxy or
 > a tunneling tool) so `getUserMedia` is permitted.
 
+### Use it like an app
+
+Both pages are installable: open a link **with `?secret=` once** and the token is
+saved to that device's local storage and stripped from the URL, so afterwards a
+bare link (or home-screen icon) just works. On iOS use **Share → Add to Home
+Screen** to get a fullscreen, standalone icon for the camera and the viewer.
+Once installed and permission is granted, the camera starts on its own when
+launched and the viewer auto-connects — open the icon and you're live. (If the
+secret is ever missing, the page prompts for it once instead of failing.)
+
 ### Watching over cellular / from outside the house
 
-See **[SETUP.md](./SETUP.md)** for a click-by-click guide using Tailscale (free,
-private, recommended for a personal "just me" dog cam).
+See **[SETUP.md](./SETUP.md)** for two click-by-click guides:
+
+- **No home computer** — host the signaling server in the cloud on
+  [Render](https://render.com) (free HTTPS, works on cellular with a TURN relay).
+  This needs only the iPad and your phone. A `render.yaml` blueprint is included
+  for one-click deploy.
+- **Tailscale** — keep the server on an always-on computer at home behind a free
+  private VPN; no public exposure, no TURN needed.
 
 ### Configuration (environment variables)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `STREAM_SECRET` | `MySuperSecretToken123` | Shared secret required on every connection. |
+| `STREAM_SECRET` | `CleoCam` | Shared secret required on every connection. |
 | `PORT` | `3000` | HTTP/WebSocket port. |
 | `HOST` | `0.0.0.0` | Bind address (all interfaces, so the LAN/VPN can reach it). |
-| `TURN_URL` | — | Optional TURN relay URL, e.g. `turn:host:3478`. Needed for cellular **without** a VPN. |
+| `TURN_URL` | — | Optional TURN relay URL(s). Needed for cellular **without** a VPN. Accepts a single URL (`turn:host:3478`) or a comma-separated list to advertise several transports at once (`turn:host:3478,turn:host:443?transport=tcp,turns:host:443?transport=tcp`) — the extra TCP/TLS/443 entries are what make cellular and locked-down wifi work. |
 | `TURN_USERNAME` | — | TURN username (if `TURN_URL` set). |
 | `TURN_CREDENTIAL` | — | TURN password (if `TURN_URL` set). |
 | `TLS_CERT_FILE` | — | Path to a TLS certificate. When set with `TLS_KEY_FILE`, the server terminates HTTPS itself (HTTP/1.1 only — no HTTP/2), bypassing reverse-proxy issues like iOS Safari failing WebSocket-over-HTTP/2 through `tailscale serve`. |
