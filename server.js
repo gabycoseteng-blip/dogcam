@@ -68,11 +68,24 @@ const TLS_KEY_FILE = process.env.TLS_KEY_FILE;
 function buildIceServers() {
   const servers = [{ urls: 'stun:stun.l.google.com:19302' }];
   if (process.env.TURN_URL) {
-    servers.push({
-      urls: process.env.TURN_URL, // e.g. turn:turn.example.com:3478
-      username: process.env.TURN_USERNAME || '',
-      credential: process.env.TURN_CREDENTIAL || '',
-    });
+    // TURN_URL may be a single URL or a comma/whitespace-separated list, so one
+    // set of credentials can advertise several transports at once. This matters
+    // on cellular: only TURN over TCP and TLS on port 443 reliably punches
+    // through restrictive carrier/captive networks, while UDP is faster when it
+    // is allowed. Listing e.g.
+    //   turn:host:3478,turn:host:3478?transport=tcp,turns:host:443?transport=tcp
+    // lets the browser pick whichever path actually works.
+    const urls = process.env.TURN_URL
+      .split(',')
+      .map((u) => u.trim())
+      .filter(Boolean);
+    if (urls.length) {
+      servers.push({
+        urls: urls.length === 1 ? urls[0] : urls,
+        username: process.env.TURN_USERNAME || '',
+        credential: process.env.TURN_CREDENTIAL || '',
+      });
+    }
   }
   return servers;
 }
