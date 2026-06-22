@@ -249,8 +249,10 @@
 
       ws.onopen = () => setStatus('Live — waiting for phones', true);
 
-      ws.onclose = () => {
-        setStatus('Disconnected', false);
+      ws.onclose = (event) => {
+        // Surface the raw close code/reason on screen — there's no devtools
+        // on an iPad, so this is the only way to diagnose a failed handshake.
+        setStatus(`Disconnected (code ${event.code}${event.reason ? ': ' + event.reason : ''})`, false);
         // The signaling channel is gone; existing P2P streams may persist
         // briefly but no new viewers can negotiate. Try to reconnect.
         setTimeout(connectSocket, 2000);
