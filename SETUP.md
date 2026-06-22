@@ -248,22 +248,36 @@ relay**. The free tier of a managed provider is plenty for one dog cam:
 > Only ever watch on your home wifi? You can skip this step entirely; STUN
 > (built in) is enough on the same network.
 
-### Step 4 — Open the links
+### Step 4 — Open the links once, then add to the home screen
 
-Replace the hostname and secret with yours.
+You open each link **with the code just once**. The app saves the code on that
+device and removes it from the address bar, so from then on you launch it like
+any app — no code, no typing.
 
 - **iPad (camera):**
   ```
   https://dogcam-xxxx.onrender.com/camera.html?secret=YOUR_SECRET
   ```
-  Tap **Start Camera**, allow camera + microphone, prop the iPad facing your
-  dog, leave Safari open (Settings → Display → Auto-Lock → Never helps).
+  In Safari, tap **Share → Add to Home Screen**. Open the new **Dog Cam Cam**
+  icon, tap **Start Camera** once and allow camera + microphone. Prop the iPad
+  facing your dog (Settings → Display → Auto-Lock → Never helps).
 - **Phone (viewer):**
   ```
   https://dogcam-xxxx.onrender.com/?secret=YOUR_SECRET
   ```
-  Works on wifi and, with Step 3 done, on cellular. Bookmark it / add to home
-  screen.
+  Tap **Share → Add to Home Screen** to get a **Dog Cam** icon. Works on wifi
+  and, with Step 3 done, on cellular.
+
+After this, **all you do is tap the home-screen icon**:
+
+- The **iPad** app re-opens fullscreen and starts the camera automatically (once
+  you've granted permission the first time).
+- The **phone** app re-opens fullscreen and connects on its own. The video shows
+  right away; if iOS muted it, tap once for sound.
+
+> The code lives only on each device (in its browser storage). If you ever clear
+> Safari data or use a new device, just open the link with `?secret=YOUR_SECRET`
+> again — or type the code into the prompt the app shows on first launch.
 
 ### Good to know about the free plan
 

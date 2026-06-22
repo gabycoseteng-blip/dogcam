@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Dog Cam — Viewer</title>
+  <!-- Install-to-home-screen / standalone "app" behaviour. -->
+  <link rel="manifest" href="/manifest-viewer.webmanifest" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dog Cam" />
+  <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+  <link rel="icon" href="/icons/icon-192.png" />
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -62,6 +71,22 @@
     }
     .hidden { display: none !important; }
     .err { color: #ff453a; font-size: 14px; max-width: 320px; }
+    .setup {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 12px;
+      text-align: center; padding: 24px; background: #000;
+    }
+    .setup p { color: #9b9b9d; font-size: 15px; max-width: 320px; line-height: 1.5; }
+    .setup input {
+      appearance: none; border: 1px solid #2c2c2e; border-radius: 12px;
+      background: #1c1c1e; color: #fff; font-size: 16px; padding: 13px 14px;
+      width: 100%; max-width: 320px; text-align: center;
+    }
+    .setup button {
+      appearance: none; border: none; border-radius: 14px;
+      background: #0a84ff; color: #fff; font-size: 16px; font-weight: 600;
+      padding: 14px 26px; width: 100%; max-width: 320px;
+    }
   </style>
 </head>
 <body>
@@ -81,10 +106,20 @@
       <div id="errText" class="err"></div>
     </div>
 
-    <!-- iOS requires a user gesture before audio can play; this catches the
-         case where autoplay-with-sound is blocked. -->
+    <!-- iOS requires a user gesture before audio can play; the video shows
+         immediately (muted) and this prompt adds sound on tap. -->
     <div class="tap hidden" id="tapOverlay">
-      <button>Tap to start audio</button>
+      <button>Tap for sound</button>
+    </div>
+
+    <!-- First run on this device with no saved code: ask for it once. -->
+    <div class="setup hidden" id="setupOverlay">
+      <p>Enter the access code for your Dog Cam. You only need to do this once
+         on this device.</p>
+      <input id="secretInput" type="password" inputmode="text"
+             autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="Enter access code" />
+      <button id="saveSecretBtn">Save</button>
     </div>
   </div>
 
@@ -99,9 +134,24 @@
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     };
 
-    // Read the shared secret from this page's URL and reuse it for the socket.
-    const params = new URLSearchParams(location.search);
-    const secret = params.get('secret') || '';
+    // The shared secret can arrive once via the URL (?secret=…); we persist it
+    // to localStorage and strip it from the address bar, so afterwards just
+    // opening the app / home-screen icon works with no token in the URL. If it's
+    // still missing we prompt for it once (handled near the bottom).
+    const SECRET_KEY = 'dogcam_secret';
+    function readSecret() {
+      const params = new URLSearchParams(location.search);
+      const fromUrl = params.get('secret');
+      if (fromUrl) {
+        try { localStorage.setItem(SECRET_KEY, fromUrl); } catch (_e) {}
+        params.delete('secret');
+        const clean = location.pathname + (params.toString() ? '?' + params : '') + location.hash;
+        try { history.replaceState(null, '', clean); } catch (_e) {}
+        return fromUrl;
+      }
+      try { return localStorage.getItem(SECRET_KEY) || ''; } catch (_e) { return ''; }
+    }
+    let secret = readSecret();
 
     async function loadIceConfig() {
       try {
@@ -210,7 +260,10 @@
       const p = remote.play();
       if (p && typeof p.catch === 'function') {
         p.catch(() => {
-          // Autoplay with audio was blocked — show a tap-to-start prompt.
+          // Autoplay with audio was blocked (iOS). Show the picture right away
+          // by playing muted, and offer a one-tap prompt to turn sound on.
+          remote.muted = true;
+          remote.play().catch(() => {});
           tapOverlay.classList.remove('hidden');
         });
       }
@@ -218,6 +271,7 @@
 
     tapOverlay.addEventListener('click', () => {
       tapOverlay.classList.add('hidden');
+      remote.muted = false;
       remote.play().catch(() => {});
     });
 
@@ -284,13 +338,35 @@
       if (ws) try { ws.close(); } catch (_e) {}
     });
 
-    if (!secret) {
+    // ---- First-run secret prompt ------------------------------------------
+    const setupOverlay = document.getElementById('setupOverlay');
+    const secretInput = document.getElementById('secretInput');
+    const saveSecretBtn = document.getElementById('saveSecretBtn');
+
+    function startViewing() {
+      setupOverlay.classList.add('hidden');
       waitOverlay.classList.remove('hidden');
-      waitText.textContent = '';
-      errText.textContent = 'Missing ?secret= token in the URL.';
-    } else {
+      waitText.textContent = 'Connecting to the camera…';
       // Fetch ICE/TURN config first, then connect and announce ourselves.
       loadIceConfig().then(connectSocket);
+    }
+
+    function saveSecret() {
+      const v = secretInput.value.trim();
+      if (!v) return;
+      try { localStorage.setItem(SECRET_KEY, v); } catch (_e) {}
+      secret = v;
+      startViewing();
+    }
+    saveSecretBtn.addEventListener('click', saveSecret);
+    secretInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSecret(); });
+
+    if (!secret) {
+      // No saved code on this device yet: ask for it once.
+      waitOverlay.classList.add('hidden');
+      setupOverlay.classList.remove('hidden');
+    } else {
+      startViewing();
     }
   })();
   </script>

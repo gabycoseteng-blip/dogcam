@@ -63,6 +63,16 @@ Then open:
 > For real devices on your LAN, terminate TLS (e.g. behind a reverse proxy or
 > a tunneling tool) so `getUserMedia` is permitted.
 
+### Use it like an app
+
+Both pages are installable: open a link **with `?secret=` once** and the token is
+saved to that device's local storage and stripped from the URL, so afterwards a
+bare link (or home-screen icon) just works. On iOS use **Share → Add to Home
+Screen** to get a fullscreen, standalone icon for the camera and the viewer.
+Once installed and permission is granted, the camera starts on its own when
+launched and the viewer auto-connects — open the icon and you're live. (If the
+secret is ever missing, the page prompts for it once instead of failing.)
+
 ### Watching over cellular / from outside the house
 
 See **[SETUP.md](./SETUP.md)** for two click-by-click guides:

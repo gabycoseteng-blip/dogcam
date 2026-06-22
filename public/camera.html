@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Dog Cam — Transmitter (iPad)</title>
+  <!-- Install-to-home-screen / standalone "app" behaviour. -->
+  <link rel="manifest" href="/manifest-camera.webmanifest" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dog Cam Cam" />
+  <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+  <link rel="icon" href="/icons/icon-192.png" />
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -69,6 +78,12 @@
     button:active { transform: scale(0.98); }
     .hidden { display: none !important; }
     .err { color: #ff453a; font-size: 13px; max-width: 320px; }
+    .setup { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 320px; }
+    .setup input {
+      appearance: none; border: 1px solid #2c2c2e; border-radius: 12px;
+      background: #1c1c1e; color: #fff; font-size: 16px; padding: 13px 14px;
+      width: 100%; text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -86,8 +101,14 @@
     </div>
 
     <div id="startOverlay" class="start-overlay">
-      <p>Point this iPad at your dog and tap below. It will use the back
-         camera and microphone and stream to your phones.</p>
+      <p id="startText">Point this iPad at your dog and tap below. It will use the
+         back camera and microphone and stream to your phones.</p>
+      <div id="setupRow" class="setup hidden">
+        <input id="secretInput" type="password" inputmode="text"
+               autocomplete="off" autocapitalize="off" spellcheck="false"
+               placeholder="Enter access code" />
+        <button id="saveSecretBtn">Save &amp; Start</button>
+      </div>
       <button id="startBtn">Start Camera</button>
       <div id="startErr" class="err"></div>
     </div>
@@ -121,11 +142,24 @@
     // Hard cap: this camera streams to at most two phones simultaneously.
     const MAX_VIEWERS = 2;
 
-    // The shared secret is read from THIS page's own URL query string and
-    // reused to authenticate the WebSocket. Serving the page already required
-    // knowing the URL; we simply forward the same token to the socket layer.
-    const params = new URLSearchParams(location.search);
-    const secret = params.get('secret') || '';
+    // The shared secret authenticates the WebSocket. It can arrive once via the
+    // URL (?secret=…); we then persist it to localStorage and strip it from the
+    // address bar, so afterwards just opening the app / home-screen icon works
+    // with no token in the URL. If it's still missing, we prompt for it once.
+    const SECRET_KEY = 'dogcam_secret';
+    function readSecret() {
+      const params = new URLSearchParams(location.search);
+      const fromUrl = params.get('secret');
+      if (fromUrl) {
+        try { localStorage.setItem(SECRET_KEY, fromUrl); } catch (_e) {}
+        params.delete('secret');
+        const clean = location.pathname + (params.toString() ? '?' + params : '') + location.hash;
+        try { history.replaceState(null, '', clean); } catch (_e) {}
+        return fromUrl;
+      }
+      try { return localStorage.getItem(SECRET_KEY) || ''; } catch (_e) { return ''; }
+    }
+    let secret = readSecret();
 
     // ---- State ------------------------------------------------------------
     let ws = null;
@@ -312,7 +346,11 @@
     }
 
     // ---- Start flow -------------------------------------------------------
-    async function start() {
+    // `auto` is true when we try to start on launch without a tap. iOS often
+    // requires a user gesture for camera access the first time, so on an auto
+    // attempt we fail quietly and leave the Start button for a manual tap;
+    // once permission is granted it persists and future launches start hands-free.
+    async function start(auto) {
       startErr.textContent = '';
       try {
         // Request the BACK camera (environment) plus microphone audio.
@@ -321,7 +359,9 @@
           audio: true,
         });
       } catch (err) {
-        startErr.textContent = 'Could not access camera/microphone: ' + err.message;
+        if (!auto) {
+          startErr.textContent = 'Could not access camera/microphone: ' + err.message;
+        }
         return;
       }
 
@@ -365,7 +405,7 @@
       if (localStream && (!ws || ws.readyState === WebSocket.CLOSED)) connectSocket();
     });
 
-    startBtn.addEventListener('click', start);
+    startBtn.addEventListener('click', () => start(false));
 
     // Belt-and-suspenders cleanup: close all peer connections if the page is
     // unloaded so we don't leave half-open transports on mobile Safari.
@@ -375,9 +415,35 @@
       if (wakeLock) try { wakeLock.release(); } catch (_e) {} finally { wakeLock = null; }
     });
 
+    // ---- First-run secret prompt ------------------------------------------
+    const setupRow = document.getElementById('setupRow');
+    const secretInput = document.getElementById('secretInput');
+    const saveSecretBtn = document.getElementById('saveSecretBtn');
+    const startText = document.getElementById('startText');
+
+    function saveSecret() {
+      const v = secretInput.value.trim();
+      if (!v) return;
+      try { localStorage.setItem(SECRET_KEY, v); } catch (_e) {}
+      secret = v;
+      setupRow.classList.add('hidden');
+      startBtn.classList.remove('hidden');
+      // This click is a user gesture, so the camera can start immediately.
+      start(false);
+    }
+    saveSecretBtn.addEventListener('click', saveSecret);
+    secretInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSecret(); });
+
     if (!secret) {
-      startErr.textContent = 'Missing ?secret= token in the URL.';
-      startBtn.disabled = true;
+      // First run on this device with no saved code: ask for it once.
+      startText.textContent = 'Enter the access code for your Dog Cam to begin. '
+        + 'You only need to do this once on this device.';
+      setupRow.classList.remove('hidden');
+      startBtn.classList.add('hidden');
+    } else {
+      // We have a code — try to go live automatically. Falls back to the
+      // Start button if iOS wants a tap to grant camera access.
+      start(true);
     }
   })();
   </script>
