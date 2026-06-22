@@ -65,8 +65,14 @@ Then open:
 
 ### Watching over cellular / from outside the house
 
-See **[SETUP.md](./SETUP.md)** for a click-by-click guide using Tailscale (free,
-private, recommended for a personal "just me" dog cam).
+See **[SETUP.md](./SETUP.md)** for two click-by-click guides:
+
+- **No home computer** — host the signaling server in the cloud on
+  [Render](https://render.com) (free HTTPS, works on cellular with a TURN relay).
+  This needs only the iPad and your phone. A `render.yaml` blueprint is included
+  for one-click deploy.
+- **Tailscale** — keep the server on an always-on computer at home behind a free
+  private VPN; no public exposure, no TURN needed.
 
 ### Configuration (environment variables)
 
@@ -75,7 +81,7 @@ private, recommended for a personal "just me" dog cam).
 | `STREAM_SECRET` | `MySuperSecretToken123` | Shared secret required on every connection. |
 | `PORT` | `3000` | HTTP/WebSocket port. |
 | `HOST` | `0.0.0.0` | Bind address (all interfaces, so the LAN/VPN can reach it). |
-| `TURN_URL` | — | Optional TURN relay URL, e.g. `turn:host:3478`. Needed for cellular **without** a VPN. |
+| `TURN_URL` | — | Optional TURN relay URL(s). Needed for cellular **without** a VPN. Accepts a single URL (`turn:host:3478`) or a comma-separated list to advertise several transports at once (`turn:host:3478,turn:host:443?transport=tcp,turns:host:443?transport=tcp`) — the extra TCP/TLS/443 entries are what make cellular and locked-down wifi work. |
 | `TURN_USERNAME` | — | TURN username (if `TURN_URL` set). |
 | `TURN_CREDENTIAL` | — | TURN password (if `TURN_URL` set). |
 | `TLS_CERT_FILE` | — | Path to a TLS certificate. When set with `TLS_KEY_FILE`, the server terminates HTTPS itself (HTTP/1.1 only — no HTTP/2), bypassing reverse-proxy issues like iOS Safari failing WebSocket-over-HTTP/2 through `tailscale serve`. |

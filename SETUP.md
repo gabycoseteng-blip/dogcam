@@ -7,6 +7,11 @@ any extra relay server.
 
 You'll set up three devices once. After that you just open a link.
 
+> **Don't want to leave a computer running at home?** See
+> **[No home computer: host on Render](#no-home-computer-host-on-render)** at the
+> bottom. That path puts the tiny signaling server in the cloud, so you only need
+> the **iPad** and your **phone** — and it works over cellular too.
+
 ---
 
 ## What you need
@@ -191,3 +196,84 @@ STREAM_SECRET=ChangeMeToSomethingLong npm start
 
 Managed TURN providers (Metered, Twilio, etc.) give you those three values.
 For a personal "just me" setup you don't need this — Tailscale handles it.
+
+---
+
+## No home computer: host on Render
+
+This is the simplest way to run the cam with **no always-on computer at home**.
+The signaling server lives in the cloud on [Render](https://render.com); the
+video still flows directly **iPad → phone**, so Render only ever sees the tiny
+handshake, never your video. Render gives you free HTTPS automatically, which is
+exactly what the iPad needs to allow the camera — no certificates to manage.
+
+You'll need just **two devices**: the **iPad** (camera) and your **phone**
+(viewer). It works on **wifi and cellular**.
+
+### Step 1 — Deploy the server to Render
+
+1. Push this repo to your own GitHub account (fork it or push a copy).
+2. Go to <https://dashboard.render.com> → **New** → **Blueprint**, and pick your
+   `dogcam` repo. Render reads the included `render.yaml` and creates the
+   service on the **free** plan.
+3. Click **Apply** and wait for the first deploy to finish. Your cam is now at a
+   URL like `https://dogcam-xxxx.onrender.com`.
+
+### Step 2 — Get your secret
+
+Render generated a random `STREAM_SECRET` for you. Open the service →
+**Environment** tab → copy the `STREAM_SECRET` value. You'll paste it into the
+links below as `?secret=...`.
+
+### Step 3 — Turn on cellular support (TURN)
+
+Cellular networks block direct phone-to-phone video, so you need a **TURN
+relay**. The free tier of a managed provider is plenty for one dog cam:
+
+1. Sign up at <https://www.metered.ca/tools/openrelay/> (or
+   <https://dashboard.metered.ca>) and create a free TURN app. It gives you a
+   **username**, a **credential/password**, and a set of URLs.
+2. Back in Render → your service → **Environment**, set:
+   - `TURN_USERNAME` = the username they gave you
+   - `TURN_CREDENTIAL` = the password they gave you
+   - `TURN_URL` = a **comma-separated** list covering every transport, e.g.:
+     ```
+     turn:a.relay.metered.ca:80,turn:a.relay.metered.ca:80?transport=tcp,turn:a.relay.metered.ca:443,turns:a.relay.metered.ca:443?transport=tcp
+     ```
+     (Use the exact hostnames from your provider. Including the `:443` /
+     `?transport=tcp` / `turns:` variants is what makes it work on locked-down
+     cellular and public wifi.)
+3. **Save** — Render redeploys automatically.
+
+> Only ever watch on your home wifi? You can skip this step entirely; STUN
+> (built in) is enough on the same network.
+
+### Step 4 — Open the links
+
+Replace the hostname and secret with yours.
+
+- **iPad (camera):**
+  ```
+  https://dogcam-xxxx.onrender.com/camera.html?secret=YOUR_SECRET
+  ```
+  Tap **Start Camera**, allow camera + microphone, prop the iPad facing your
+  dog, leave Safari open (Settings → Display → Auto-Lock → Never helps).
+- **Phone (viewer):**
+  ```
+  https://dogcam-xxxx.onrender.com/?secret=YOUR_SECRET
+  ```
+  Works on wifi and, with Step 3 done, on cellular. Bookmark it / add to home
+  screen.
+
+### Good to know about the free plan
+
+- Render's free web service **spins down after ~15 minutes of no traffic** and
+  cold-starts (~30–60s) on the next request. While the iPad is connected it
+  holds an open WebSocket, which counts as traffic and keeps the service awake —
+  so as long as your camera is running, viewers connect instantly. If you ever
+  see "Connecting…" right after opening the camera page, give it a minute for
+  the first wake-up, or upgrade to Render's cheapest paid plan to keep it always
+  on.
+- Free TURN tiers have a monthly data cap (Metered's is generous for one cam).
+  Note that TURN is only used as a fallback when direct P2P fails — much of the
+  time on wifi you won't touch it at all.
