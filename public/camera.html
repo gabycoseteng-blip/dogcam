@@ -76,34 +76,55 @@
 
     /* ---- Trains panel ----------------------------------------------------- */
     .trains {
-      width: 100%; max-width: 560px;
-      display: flex; flex-direction: column; gap: 12px;
+      width: 100%; max-width: 760px;
+      display: flex; flex-direction: column; gap: 14px;
     }
     .trains-title {
       font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
       color: #8a8a8d; display: flex; align-items: center; justify-content: center; gap: 8px;
     }
-    .line {
-      display: flex; align-items: center; gap: 14px;
-      background: #121214; border: 1px solid #1f1f22; border-radius: 16px;
-      padding: 14px 16px;
+    /* Big Queens-bound console — reused on the idle dashboard and as the
+       left-side overlay while the camera is live. Times are sized like the
+       clock (clamp up to ~96px). */
+    .qline {
+      display: flex; align-items: center; gap: 18px;
+      background: #121214; border: 1px solid #1f1f22; border-radius: 18px;
+      padding: 16px 22px;
     }
     .bullet {
-      width: 44px; height: 44px; flex: 0 0 auto; border-radius: 50%;
+      flex: 0 0 auto; border-radius: 50%; color: #fff;
       display: flex; align-items: center; justify-content: center;
-      font-weight: 700; font-size: 22px; color: #fff;
+      width: 68px; height: 68px; font-size: 34px; font-weight: 700;
     }
     .bullet.F { background: #ff6319; }     /* official MTA orange */
     .bullet.G { background: #6cbe45; }     /* official MTA light green */
-    .dirs { flex: 1; display: flex; flex-direction: column; gap: 6px; text-align: left; }
-    .dir { display: flex; align-items: baseline; gap: 8px; }
-    .dir .label { color: #9b9b9d; font-size: 13px; min-width: 124px; }
-    .dir .times { font-size: 17px; font-variant-numeric: tabular-nums; }
-    .dir .times .soon { color: #30d158; font-weight: 600; }
-    .dir .times .min { color: #6e6e73; font-size: 13px; }
-    .dir .none { color: #5a5a5e; font-size: 14px; }
+    .qbody { display: flex; flex-direction: column; gap: 2px; text-align: left; min-width: 0; }
+    .qlabel {
+      color: #9b9b9d; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .qtimes {
+      font-size: clamp(42px, 8.5vw, 84px); font-weight: 300; line-height: 1.02;
+      font-variant-numeric: tabular-nums; letter-spacing: -0.01em; white-space: nowrap;
+    }
+    .qtimes .soon { color: #30d158; font-weight: 400; }
+    .qtimes .sep { color: #4a4a4e; }
+    .qtimes .min { color: #6e6e73; font-size: 0.3em; font-weight: 400; }
+    .qtimes .none { color: #5a5a5e; font-size: 0.42em; }
     .trains-foot { font-size: 11px; color: #5a5a5e; }
     .trains-foot.stale { color: #ff9f0a; }
+
+    /* Live overlay: the same console pinned to the left of the video. */
+    .live-trains {
+      position: absolute; top: 0; left: 0; bottom: 0;
+      display: flex; flex-direction: column; justify-content: center; gap: 16px;
+      width: min(52%, 560px); padding: 24px 24px 24px 22px; pointer-events: none;
+      background: linear-gradient(to right, rgba(0,0,0,0.74), rgba(0,0,0,0.18) 78%, transparent);
+    }
+    .live-trains .trains-title { justify-content: flex-start; }
+    .live-trains .qline { background: rgba(12,12,14,0.5); border-color: rgba(255,255,255,0.08); }
+    /* Slightly smaller in the narrower overlay so all 3 trains fit on one line. */
+    .live-trains .qtimes { font-size: clamp(32px, 5.5vw, 56px); }
+    .live-trains .bullet { width: 52px; height: 52px; font-size: 26px; }
 
     .sched-status { font-size: 13px; color: #9b9b9d; max-width: 460px; }
     .sched-status b { color: #d0d0d0; font-weight: 600; }
@@ -136,18 +157,6 @@
       background: rgba(255,255,255,0.14); border-radius: 999px;
       padding: 3px 10px; font-size: 12px;
     }
-    .mini-trains { display: flex; gap: 10px; flex-wrap: wrap; }
-    .mini {
-      display: inline-flex; align-items: center; gap: 6px;
-      background: rgba(0,0,0,0.45); border-radius: 999px; padding: 3px 10px 3px 4px;
-      font-variant-numeric: tabular-nums;
-    }
-    .mini .b {
-      width: 22px; height: 22px; border-radius: 50%; color: #fff;
-      display: inline-flex; align-items: center; justify-content: center;
-      font-weight: 700; font-size: 12px;
-    }
-    .mini .b.F { background: #ff6319; } .mini .b.G { background: #6cbe45; }
     button.stop {
       appearance: none; border: none; border-radius: 12px;
       background: rgba(255,69,58,0.92); color: #fff; font-size: 14px; font-weight: 600;
@@ -231,7 +240,7 @@
       </div>
 
       <div class="trains">
-        <div class="trains-title">🚇 Carroll St · next trains</div>
+        <div class="trains-title">🚇 Carroll St · Queens-bound F &amp; G</div>
         <div id="trainLines"></div>
         <div id="trainsFoot" class="trains-foot">Loading arrivals…</div>
       </div>
@@ -250,11 +259,17 @@
       <div id="startErr" class="err"></div>
     </div>
 
-    <!-- STREAMING OVERLAY -->
+    <!-- LIVE TRAIN CONSOLE: the full Queens-bound console pinned to the left
+         of the video while the camera is streaming. -->
+    <div id="liveTrains" class="live-trains hidden">
+      <div class="trains-title">🚇 Carroll St · Queens-bound F &amp; G</div>
+      <div id="liveTrainLines"></div>
+    </div>
+
+    <!-- STREAMING OVERLAY (status + viewers + stop, along the bottom) -->
     <div id="meta" class="meta hidden">
       <div class="left">
         <span id="statusText">Connecting…</span>
-        <span class="mini-trains" id="miniTrains"></span>
         <span class="viewers" id="viewers"></span>
       </div>
       <button id="stopBtn" class="stop">Stop</button>
@@ -353,7 +368,7 @@
     const statusText = document.getElementById('statusText');
     const meta = document.getElementById('meta');
     const viewersEl = document.getElementById('viewers');
-    const miniTrains = document.getElementById('miniTrains');
+    const liveTrains = document.getElementById('liveTrains');
     const tapPrompt = document.getElementById('tapPrompt');
     const tapStartBtn = document.getElementById('tapStartBtn');
 
@@ -526,6 +541,8 @@
       preview.classList.remove('hidden');
       dashboard.classList.add('hidden');
       meta.classList.remove('hidden');
+      liveTrains.classList.remove('hidden');
+      renderTrains(); // make sure the live console is populated immediately
       setStatus('Live — waiting for phones', true);
       renderViewers();
       requestWakeLock();
@@ -551,6 +568,7 @@
       preview.srcObject = null;
       preview.classList.add('hidden');
       meta.classList.add('hidden');
+      liveTrains.classList.add('hidden');
       dashboard.classList.remove('hidden');
       hideTapPrompt();
       updateScheduleStatus();
@@ -604,16 +622,15 @@
     // Train arrivals (Carroll St — F & G)
     // =======================================================================
     const trainLines = document.getElementById('trainLines');
+    const liveTrainLines = document.getElementById('liveTrainLines');
     const trainsFoot = document.getElementById('trainsFoot');
     let lastTrains = null;       // last good payload from /trains
     let lastTrainsAt = 0;
 
-    // Direction labels are station-specific. For Carroll St, N = uptown toward
-    // Manhattan/Queens, S = downtown into Brooklyn.
-    const DIR_LABELS = {
-      F: { N: 'Manhattan / Queens', S: 'Coney Island' },
-      G: { N: 'Court Sq (Queens)',  S: 'Church Av' },
-    };
+    // We only surface Queens-bound trains. At Carroll St that is the
+    // northbound ('N') platform for both lines: the F runs up toward Manhattan
+    // and on to Jamaica/Queens, the G runs up toward Court Sq, Queens.
+    const QUEENS_DIR = 'N';
 
     async function loadTrains() {
       try {
@@ -628,52 +645,50 @@
       renderTrains();
     }
 
-    // Group arrivals -> { F: {N:[mins], S:[mins]}, G: {...} } using live minutes
-    // recomputed from each train's absolute time so countdowns stay accurate
-    // between fetches.
-    function groupArrivals() {
-      const out = { F: { N: [], S: [] }, G: { N: [], S: [] } };
+    // Live Queens-bound minutes for each route, recomputed from each train's
+    // absolute time so the countdown stays accurate between fetches:
+    //   { F: [mins...], G: [mins...] }
+    function queensArrivals() {
+      const out = { F: [], G: [] };
       if (!lastTrains || !Array.isArray(lastTrains.arrivals)) return out;
       const now = Date.now();
       for (const a of lastTrains.arrivals) {
-        if (!out[a.route] || !out[a.route][a.direction]) continue;
+        if (a.direction !== QUEENS_DIR || !out[a.route]) continue;
         const mins = Math.round((new Date(a.time).getTime() - now) / 60000);
-        if (mins < 0) continue;
-        out[a.route][a.direction].push(mins);
+        if (mins >= 0) out[a.route].push(mins);
       }
-      for (const r of ['F', 'G']) {
-        for (const d of ['N', 'S']) out[r][d].sort((x, y) => x - y);
-      }
+      out.F.sort((x, y) => x - y);
+      out.G.sort((x, y) => x - y);
       return out;
     }
 
-    function fmtTimes(mins) {
-      if (!mins.length) return '<span class="none">—</span>';
-      return mins.slice(0, 3).map((m, i) => {
+    // Big countdown for the next 3 trains: "4 · 12 · 20 min".
+    function fmtQTimes(mins) {
+      if (!mins.length) return '<span class="none">no trains</span>';
+      const items = mins.slice(0, 3).map((m, i) => {
         const cls = (i === 0 && m <= 2) ? 'soon' : '';
-        const txt = m === 0 ? 'now' : m;
-        const suffix = m === 0 ? '' : '<span class="min"> min</span>';
-        return `<span class="${cls}">${txt}${suffix}</span>`;
-      }).join('<span class="min">, </span>');
+        return `<span class="${cls}">${m === 0 ? 'now' : m}</span>`;
+      });
+      return items.join('<span class="sep"> · </span>') + '<span class="min"> min</span>';
+    }
+
+    // One big console line per route (F, then G), Queens-bound only.
+    function buildQLines(q) {
+      return ['F', 'G'].map((route) => `
+        <div class="qline">
+          <div class="bullet ${route}">${route}</div>
+          <div class="qbody">
+            <div class="qlabel">Queens-bound</div>
+            <div class="qtimes">${fmtQTimes(q[route])}</div>
+          </div>
+        </div>`).join('');
     }
 
     function renderTrains() {
-      const g = groupArrivals();
-      trainLines.innerHTML = '';
-      for (const route of ['F', 'G']) {
-        const line = document.createElement('div');
-        line.className = 'line';
-        line.innerHTML = `
-          <div class="bullet ${route}">${route}</div>
-          <div class="dirs">
-            <div class="dir"><span class="label">↑ ${DIR_LABELS[route].N}</span>
-              <span class="times">${fmtTimes(g[route].N)}</span></div>
-            <div class="dir"><span class="label">↓ ${DIR_LABELS[route].S}</span>
-              <span class="times">${fmtTimes(g[route].S)}</span></div>
-          </div>`;
-        trainLines.appendChild(line);
-      }
-      renderMiniTrains(g);
+      const q = queensArrivals();
+      const html = buildQLines(q);
+      trainLines.innerHTML = html;
+      liveTrainLines.innerHTML = html;
 
       // Footer: freshness. Mark stale if the last successful fetch is old.
       const ageSec = lastTrainsAt ? Math.round((Date.now() - lastTrainsAt) / 1000) : null;
@@ -686,23 +701,6 @@
       } else {
         trainsFoot.textContent = `Updated ${ageSec}s ago · live from MTA`;
         trainsFoot.classList.remove('stale');
-      }
-    }
-
-    // Compact countdown chips for the streaming overlay: soonest each line.
-    function renderMiniTrains(g) {
-      miniTrains.innerHTML = '';
-      for (const route of ['F', 'G']) {
-        const up = g[route].N[0];
-        const down = g[route].S[0];
-        const parts = [];
-        if (up != null) parts.push('↑' + (up === 0 ? 'now' : up + 'm'));
-        if (down != null) parts.push('↓' + (down === 0 ? 'now' : down + 'm'));
-        if (!parts.length) continue;
-        const chip = document.createElement('span');
-        chip.className = 'mini';
-        chip.innerHTML = `<span class="b ${route}">${route}</span>${parts.join(' ')}`;
-        miniTrains.appendChild(chip);
       }
     }
 
