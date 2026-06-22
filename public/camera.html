@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Dog Cam — Transmitter (iPad)</title>
   <style>
     :root { color-scheme: dark; }
@@ -14,6 +15,7 @@
       background: #000;
       color: #f2f2f2;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-user-select: none; user-select: none;
     }
     body { display: flex; flex-direction: column; }
     header {
@@ -22,8 +24,16 @@
       align-items: center;
       gap: 12px;
       border-bottom: 1px solid #1c1c1e;
+      flex: 0 0 auto;
     }
     header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+    header .spacer { flex: 1; }
+    #clock { font-variant-numeric: tabular-nums; font-size: 15px; color: #c9c9cb; }
+    .gear {
+      appearance: none; border: none; background: transparent; color: #c9c9cb;
+      font-size: 20px; cursor: pointer; padding: 4px 8px; border-radius: 8px;
+    }
+    .gear:active { background: rgba(255,255,255,0.1); }
     .dot {
       width: 10px; height: 10px; border-radius: 50%;
       background: #555; flex: 0 0 auto;
@@ -43,53 +53,218 @@
       width: 100%; height: 100%; object-fit: cover;
       background: #000; transform: scaleX(1);
     }
-    .meta {
-      position: absolute; bottom: 0; left: 0; right: 0;
-      padding: 14px 18px;
-      background: linear-gradient(to top, rgba(0,0,0,0.75), transparent);
-      display: flex; justify-content: space-between; align-items: flex-end;
-      font-size: 13px; color: #d0d0d0; pointer-events: none;
-    }
-    .viewers { display: flex; gap: 6px; }
-    .badge {
-      background: rgba(255,255,255,0.12); border-radius: 999px;
-      padding: 3px 10px; font-size: 12px;
-    }
-    .start-overlay {
+
+    /* ---- Idle dashboard --------------------------------------------------- */
+    .dashboard {
       position: absolute; inset: 0; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 18px;
-      background: #000; text-align: center; padding: 24px;
+      align-items: center; justify-content: center; gap: 26px;
+      padding: 28px; text-align: center; overflow-y: auto;
     }
-    .start-overlay p { max-width: 320px; color: #9b9b9d; font-size: 14px; line-height: 1.5; }
-    button {
+    .bigclock {
+      font-size: clamp(48px, 12vw, 104px); font-weight: 200;
+      letter-spacing: -0.02em; line-height: 1; font-variant-numeric: tabular-nums;
+    }
+    .bigdate { color: #9b9b9d; font-size: 16px; margin-top: -10px; }
+
+    /* ---- Trains panel ----------------------------------------------------- */
+    .trains {
+      width: 100%; max-width: 560px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .trains-title {
+      font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+      color: #8a8a8d; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .line {
+      display: flex; align-items: center; gap: 14px;
+      background: #121214; border: 1px solid #1f1f22; border-radius: 16px;
+      padding: 14px 16px;
+    }
+    .bullet {
+      width: 44px; height: 44px; flex: 0 0 auto; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 22px; color: #fff;
+    }
+    .bullet.F { background: #ff6319; }     /* official MTA orange */
+    .bullet.G { background: #6cbe45; }     /* official MTA light green */
+    .dirs { flex: 1; display: flex; flex-direction: column; gap: 6px; text-align: left; }
+    .dir { display: flex; align-items: baseline; gap: 8px; }
+    .dir .label { color: #9b9b9d; font-size: 13px; min-width: 124px; }
+    .dir .times { font-size: 17px; font-variant-numeric: tabular-nums; }
+    .dir .times .soon { color: #30d158; font-weight: 600; }
+    .dir .times .min { color: #6e6e73; font-size: 13px; }
+    .dir .none { color: #5a5a5e; font-size: 14px; }
+    .trains-foot { font-size: 11px; color: #5a5a5e; }
+    .trains-foot.stale { color: #ff9f0a; }
+
+    .sched-status { font-size: 13px; color: #9b9b9d; max-width: 460px; }
+    .sched-status b { color: #d0d0d0; font-weight: 600; }
+
+    button.primary {
       appearance: none; border: none; border-radius: 14px;
       background: #0a84ff; color: #fff; font-size: 16px; font-weight: 600;
-      padding: 14px 26px; cursor: pointer;
+      padding: 14px 30px; cursor: pointer;
     }
-    button:active { transform: scale(0.98); }
+    button.primary:active { transform: scale(0.98); }
+    .err { color: #ff453a; font-size: 13px; max-width: 340px; }
+
+    /* ---- Streaming overlay ------------------------------------------------ */
+    .meta {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 14px 18px 16px;
+      background: linear-gradient(to top, rgba(0,0,0,0.78), transparent);
+      display: flex; justify-content: space-between; align-items: flex-end;
+      gap: 12px; font-size: 13px; color: #d0d0d0;
+    }
+    .meta .left { display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+    .viewers { display: flex; gap: 6px; }
+    .badge {
+      background: rgba(255,255,255,0.14); border-radius: 999px;
+      padding: 3px 10px; font-size: 12px;
+    }
+    .mini-trains { display: flex; gap: 10px; flex-wrap: wrap; }
+    .mini {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(0,0,0,0.45); border-radius: 999px; padding: 3px 10px 3px 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .mini .b {
+      width: 22px; height: 22px; border-radius: 50%; color: #fff;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 12px;
+    }
+    .mini .b.F { background: #ff6319; } .mini .b.G { background: #6cbe45; }
+    button.stop {
+      appearance: none; border: none; border-radius: 12px;
+      background: rgba(255,69,58,0.92); color: #fff; font-size: 14px; font-weight: 600;
+      padding: 10px 18px; cursor: pointer; flex: 0 0 auto;
+    }
+
+    /* ---- Scheduled tap-to-start prompt ------------------------------------ */
+    .tap-prompt {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 16px;
+      background: rgba(0,0,0,0.92); text-align: center; padding: 28px; z-index: 5;
+    }
+    .tap-prompt p { color: #d0d0d0; max-width: 360px; font-size: 15px; line-height: 1.5; }
+
+    /* ---- Settings modal --------------------------------------------------- */
+    .modal {
+      position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,0.6);
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 30px 16px; overflow-y: auto;
+    }
+    .sheet {
+      width: 100%; max-width: 540px; background: #161618;
+      border: 1px solid #2a2a2e; border-radius: 18px; padding: 20px;
+    }
+    .sheet h2 { margin: 0 0 4px; font-size: 18px; }
+    .sheet .hint { color: #8a8a8d; font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
+    .row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .switch { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+    .switch input { width: 20px; height: 20px; }
+    .window {
+      background: #0e0e10; border: 1px solid #242428; border-radius: 12px;
+      padding: 12px; margin-bottom: 12px;
+    }
+    .days { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+    .day {
+      width: 34px; height: 34px; border-radius: 50%; border: 1px solid #3a3a3e;
+      background: transparent; color: #c9c9cb; font-size: 13px; cursor: pointer;
+    }
+    .day.on { background: #0a84ff; border-color: #0a84ff; color: #fff; font-weight: 600; }
+    .times-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .times-row input[type="time"] {
+      background: #1c1c1f; border: 1px solid #3a3a3e; color: #f2f2f2;
+      border-radius: 8px; padding: 8px 10px; font-size: 15px;
+    }
+    .times-row .to { color: #8a8a8d; }
+    .del {
+      margin-left: auto; appearance: none; border: none; background: transparent;
+      color: #ff453a; font-size: 13px; cursor: pointer; padding: 6px;
+    }
+    .sheet .actions { display: flex; gap: 10px; margin-top: 8px; }
+    .btn-secondary {
+      appearance: none; border: 1px solid #3a3a3e; background: transparent;
+      color: #f2f2f2; border-radius: 12px; padding: 12px 18px; font-size: 15px; cursor: pointer;
+    }
+    .btn-done {
+      appearance: none; border: none; background: #0a84ff; color: #fff;
+      border-radius: 12px; padding: 12px 18px; font-size: 15px; font-weight: 600;
+      cursor: pointer; margin-left: auto;
+    }
     .hidden { display: none !important; }
-    .err { color: #ff453a; font-size: 13px; max-width: 320px; }
   </style>
 </head>
 <body>
   <header>
     <span id="statusDot" class="dot"></span>
-    <h1>Dog Cam · Transmitter</h1>
+    <h1>Dog Cam</h1>
+    <span class="spacer"></span>
+    <span id="clock"></span>
+    <button id="gearBtn" class="gear" title="Schedule">⚙</button>
   </header>
 
   <div class="stage">
-    <video id="preview" autoplay playsinline muted></video>
+    <video id="preview" autoplay playsinline muted class="hidden"></video>
 
-    <div id="meta" class="meta hidden">
-      <span id="statusText">Connecting…</span>
-      <span class="viewers" id="viewers"></span>
+    <!-- IDLE DASHBOARD: shown whenever the camera is not streaming. The iPad
+         stays awake on this screen showing the time and live train arrivals. -->
+    <div id="dashboard" class="dashboard">
+      <div>
+        <div id="bigclock" class="bigclock">--:--</div>
+        <div id="bigdate" class="bigdate"></div>
+      </div>
+
+      <div class="trains">
+        <div class="trains-title">🚇 Carroll St · next trains</div>
+        <div id="trainLines"></div>
+        <div id="trainsFoot" class="trains-foot">Loading arrivals…</div>
+      </div>
+
+      <div id="schedStatus" class="sched-status"></div>
+
+      <button id="startBtn" class="primary">Start Camera</button>
+      <div id="startErr" class="err"></div>
     </div>
 
-    <div id="startOverlay" class="start-overlay">
-      <p>Point this iPad at your dog and tap below. It will use the back
-         camera and microphone and stream to your phones.</p>
-      <button id="startBtn">Start Camera</button>
-      <div id="startErr" class="err"></div>
+    <!-- STREAMING OVERLAY -->
+    <div id="meta" class="meta hidden">
+      <div class="left">
+        <span id="statusText">Connecting…</span>
+        <span class="mini-trains" id="miniTrains"></span>
+        <span class="viewers" id="viewers"></span>
+      </div>
+      <button id="stopBtn" class="stop">Stop</button>
+    </div>
+
+    <!-- Shown when a scheduled start needs a tap (iOS gesture requirement). -->
+    <div id="tapPrompt" class="tap-prompt hidden">
+      <p id="tapText">A scheduled monitoring session is starting. Tap to turn on
+         the camera (your browser needs one tap to allow the camera).</p>
+      <button id="tapStartBtn" class="primary">Start scheduled session</button>
+    </div>
+  </div>
+
+  <!-- SETTINGS / SCHEDULE EDITOR -->
+  <div id="settings" class="modal hidden">
+    <div class="sheet">
+      <h2>Auto-on schedule</h2>
+      <p class="hint">The camera turns itself on during these windows and off
+        when they end. Leave the iPad plugged in, on this page, with the camera
+        permission already granted (start it once by hand first).</p>
+
+      <label class="switch row">
+        <input type="checkbox" id="schedEnabled" />
+        <span>Enable schedule</span>
+      </label>
+
+      <div id="windowList"></div>
+
+      <div class="actions">
+        <button id="addWindowBtn" class="btn-secondary">+ Add window</button>
+        <button id="doneBtn" class="btn-done">Done</button>
+      </div>
     </div>
   </div>
 
@@ -98,13 +273,13 @@
     'use strict';
 
     // ---- Config -----------------------------------------------------------
-    // ICE servers are fetched from the server (/ice-config) so STUN/TURN setup
-    // lives in one place. We start with a Google STUN fallback so the page
-    // still works if the fetch fails; loadIceConfig() upgrades it if the server
-    // has a TURN relay configured (needed for cellular without a VPN).
-    let RTC_CONFIG = {
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-    };
+    let RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    const params = new URLSearchParams(location.search);
+    const secret = params.get('secret') || '';
+
+    // At most two phones at once.
+    const MAX_VIEWERS = 2;
 
     async function loadIceConfig() {
       try {
@@ -118,37 +293,31 @@
       } catch (_e) { /* keep the STUN fallback */ }
     }
 
-    // Hard cap: this camera streams to at most two phones simultaneously.
-    const MAX_VIEWERS = 2;
-
-    // The shared secret is read from THIS page's own URL query string and
-    // reused to authenticate the WebSocket. Serving the page already required
-    // knowing the URL; we simply forward the same token to the socket layer.
-    const params = new URLSearchParams(location.search);
-    const secret = params.get('secret') || '';
-
     // ---- State ------------------------------------------------------------
     let ws = null;
-    let myId = null;          // UUID assigned by the server.
-    let localStream = null;   // The single camera+mic stream, shared to all peers.
+    let myId = null;
+    let localStream = null;       // single camera+mic stream shared to all peers
+    let streaming = false;        // are we currently capturing + offering?
+    let startedBy = null;         // 'manual' | 'schedule' — who turned it on
+    let autoAttemptFailed = false; // a scheduled auto-start needs a manual tap
 
-    // The required mapping: phone UUID -> its dedicated RTCPeerConnection.
-    // Each phone gets an independent connection so streams run concurrently.
-    const peers = Object.create(null);
-
-    // Buffer ICE candidates that arrive before remoteDescription is set,
-    // keyed by phoneId, so none are dropped during negotiation.
-    const pendingCandidates = Object.create(null);
+    const peers = Object.create(null);             // phoneId -> RTCPeerConnection
+    const pendingCandidates = Object.create(null); // phoneId -> [candidate]
+    const waitingViewers = new Set();              // phones that announced while idle
 
     // ---- DOM --------------------------------------------------------------
     const preview = document.getElementById('preview');
-    const startOverlay = document.getElementById('startOverlay');
+    const dashboard = document.getElementById('dashboard');
     const startBtn = document.getElementById('startBtn');
     const startErr = document.getElementById('startErr');
+    const stopBtn = document.getElementById('stopBtn');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const meta = document.getElementById('meta');
     const viewersEl = document.getElementById('viewers');
+    const miniTrains = document.getElementById('miniTrains');
+    const tapPrompt = document.getElementById('tapPrompt');
+    const tapStartBtn = document.getElementById('tapStartBtn');
 
     function setStatus(text, live) {
       statusText.textContent = text;
@@ -156,38 +325,29 @@
     }
 
     function renderViewers() {
-      const ids = Object.keys(peers);
       viewersEl.innerHTML = '';
+      const ids = Object.keys(peers);
       if (ids.length === 0) {
         const b = document.createElement('span');
-        b.className = 'badge';
-        b.textContent = 'No viewers';
-        viewersEl.appendChild(b);
-        return;
+        b.className = 'badge'; b.textContent = 'No viewers';
+        viewersEl.appendChild(b); return;
       }
-      ids.forEach((id, i) => {
+      ids.forEach((_id, i) => {
         const b = document.createElement('span');
-        b.className = 'badge';
-        b.textContent = 'Phone ' + (i + 1);
+        b.className = 'badge'; b.textContent = 'Phone ' + (i + 1);
         viewersEl.appendChild(b);
       });
     }
 
     // ---- Signaling helpers ------------------------------------------------
     function signal(obj) {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(obj));
-      }
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
     }
 
     // ---- Per-viewer peer connection ---------------------------------------
-    // Build a fresh RTCPeerConnection for a specific phone, push the local
-    // media tracks onto it, and create + send an SDP offer addressed to that
-    // phone's id. Because every phone has its own connection object, the iPad
-    // can transmit to both phones at once without interference.
     async function createPeerForViewer(phoneId) {
-      if (peers[phoneId]) return; // Already connected to this phone.
-
+      if (!streaming || !localStream) { waitingViewers.add(phoneId); return; }
+      if (peers[phoneId]) return;
       if (Object.keys(peers).length >= MAX_VIEWERS) {
         console.warn('Viewer limit reached; ignoring', phoneId);
         return;
@@ -197,40 +357,25 @@
       peers[phoneId] = pc;
       pendingCandidates[phoneId] = [];
 
-      // Attach every local track (back-camera video + microphone audio).
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
-      // Trickle our ICE candidates to this specific phone as they appear.
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           signal({ type: 'ice-candidate', targetId: phoneId, candidate: event.candidate });
         }
       };
-
-      // If the connection dies (phone out of range, network drop), tear it
-      // down proactively so we don't leak a dead RTCPeerConnection.
       pc.onconnectionstatechange = () => {
         if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
           closePeer(phoneId);
         }
       };
 
-      // Offer/answer handshake — the camera is always the offerer.
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       signal({ type: 'offer', targetId: phoneId, sdp: pc.localDescription });
-
       renderViewers();
     }
 
-    // ---- Memory management ------------------------------------------------
-    // Closing a peer is the critical cleanup path. We:
-    //   1. Stop the RTCPeerConnection (frees native transport + encoder slots).
-    //   2. Delete it from the `peers` map so the object can be garbage
-    //      collected and the viewer slot is freed for a future phone.
-    //   3. Drop any buffered ICE candidates for that phone.
-    // The local camera/mic stream is intentionally NOT stopped here — it is
-    // shared across all viewers and must keep running for the others.
     function closePeer(phoneId) {
       const pc = peers[phoneId];
       if (pc) {
@@ -242,23 +387,30 @@
       renderViewers();
     }
 
+    function closeAllPeers() {
+      Object.keys(peers).forEach(closePeer);
+    }
+
     // ---- WebSocket wiring --------------------------------------------------
+    // The camera keeps the signaling socket open even while idle, so it is
+    // discoverable and can come online instantly when the schedule fires.
     function connectSocket() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}/?secret=${encodeURIComponent(secret)}`);
 
-      ws.onopen = () => setStatus('Live — waiting for phones', true);
-
+      ws.onopen = () => {
+        if (streaming) {
+          setStatus('Live — waiting for phones', true);
+          signal({ type: 'camera-ready' }); // re-announce so viewers reattach
+        }
+      };
       ws.onclose = (event) => {
-        // Surface the raw close code/reason on screen — there's no devtools
-        // on an iPad, so this is the only way to diagnose a failed handshake.
-        setStatus(`Disconnected (code ${event.code}${event.reason ? ': ' + event.reason : ''})`, false);
-        // The signaling channel is gone; existing P2P streams may persist
-        // briefly but no new viewers can negotiate. Try to reconnect.
+        if (streaming) {
+          setStatus(`Disconnected (code ${event.code}${event.reason ? ': ' + event.reason : ''})`, false);
+        }
         setTimeout(connectSocket, 2000);
       };
-
-      ws.onerror = () => setStatus('Connection error', false);
+      ws.onerror = () => { if (streaming) setStatus('Connection error', false); };
 
       ws.onmessage = async (event) => {
         let msg;
@@ -267,21 +419,18 @@
         switch (msg.type) {
           case 'welcome':
             myId = msg.id;
-            // Announce that the camera is online (informational for the server).
+            // Announce presence so any already-waiting viewers re-announce.
             signal({ type: 'camera-ready' });
             break;
 
-          // A phone joined: open a dedicated connection and offer to it.
           case 'viewer-joined':
             await createPeerForViewer(msg.from);
             break;
 
-          // The phone answered our offer.
           case 'answer': {
             const pc = peers[msg.from];
             if (!pc) return;
             await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-            // Flush any ICE candidates that arrived early.
             const queued = pendingCandidates[msg.from] || [];
             for (const c of queued) {
               try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_e) {}
@@ -290,7 +439,6 @@
             break;
           }
 
-          // Trickled ICE from the phone.
           case 'ice-candidate': {
             const pc = peers[msg.from];
             if (!pc || !msg.candidate) return;
@@ -302,82 +450,422 @@
             break;
           }
 
-          // A peer disconnected (reported by the server). If it was one of our
-          // viewers, release its connection and free the slot.
           case 'peer-left':
+            waitingViewers.delete(msg.from);
             if (peers[msg.from]) closePeer(msg.from);
             break;
         }
       };
     }
 
-    // ---- Start flow -------------------------------------------------------
-    async function start() {
+    // ---- Start / stop the camera ------------------------------------------
+    async function startCamera(by) {
+      if (streaming) return true;
       startErr.textContent = '';
       try {
-        // Request the BACK camera (environment) plus microphone audio.
         localStream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: 'environment' } },
           audio: true,
         });
       } catch (err) {
-        startErr.textContent = 'Could not access camera/microphone: ' + err.message;
-        return;
+        // On iOS, getUserMedia outside a user gesture is rejected. For a
+        // scheduled start we surface a one-tap prompt instead of failing hard.
+        if (by === 'schedule') {
+          autoAttemptFailed = true;
+          showTapPrompt();
+        } else {
+          startErr.textContent = 'Could not access camera/microphone: ' + err.message;
+        }
+        return false;
       }
 
+      streaming = true;
+      startedBy = by;
+      autoAttemptFailed = false;
+      hideTapPrompt();
+
       preview.srcObject = localStream;
-      startOverlay.classList.add('hidden');
+      preview.classList.remove('hidden');
+      dashboard.classList.add('hidden');
       meta.classList.remove('hidden');
+      setStatus('Live — waiting for phones', true);
       renderViewers();
-      // Keep the iPad screen awake so Safari isn't suspended and the stream
-      // doesn't freeze when the device would normally auto-lock.
       requestWakeLock();
-      // Pull ICE/TURN config before opening the socket so the first offers use
-      // the right servers.
-      await loadIceConfig();
-      connectSocket();
+
+      if (!ws || ws.readyState === WebSocket.CLOSED) connectSocket();
+      // Tell everyone the camera is live so viewers (re)announce themselves.
+      signal({ type: 'camera-ready' });
+      // Connect any phones that announced while we were idle.
+      for (const id of waitingViewers) createPeerForViewer(id);
+      waitingViewers.clear();
+      return true;
     }
 
+    function stopCamera() {
+      streaming = false;
+      startedBy = null;
+      closeAllPeers();
+      waitingViewers.clear();
+      if (localStream) {
+        localStream.getTracks().forEach((t) => { try { t.stop(); } catch (_e) {} });
+        localStream = null;
+      }
+      preview.srcObject = null;
+      preview.classList.add('hidden');
+      meta.classList.add('hidden');
+      dashboard.classList.remove('hidden');
+      hideTapPrompt();
+      updateScheduleStatus();
+    }
+
+    function showTapPrompt() { tapPrompt.classList.remove('hidden'); }
+    function hideTapPrompt() { tapPrompt.classList.add('hidden'); }
+
+    startBtn.addEventListener('click', () => startCamera('manual'));
+    tapStartBtn.addEventListener('click', () => startCamera('schedule'));
+    stopBtn.addEventListener('click', () => {
+      // A manual stop inside a scheduled window suppresses auto-restart until
+      // the window ends, so tapping Stop actually keeps it off.
+      if (startedBy === 'schedule' || currentlyScheduled()) scheduleSuppressed = true;
+      stopCamera();
+    });
+
     // ---- Keep-awake (Screen Wake Lock) ------------------------------------
-    // A stationary camera is useless if the iPad sleeps. We request a screen
-    // wake lock while streaming. iOS releases the lock whenever the tab is
-    // backgrounded, so we re-acquire it on the next 'visibilitychange'. The
-    // API isn't on every browser, so every call is guarded.
+    // Kept active even while idle so the dashboard/clock stays lit on the
+    // always-plugged-in iPad. iOS drops the lock when backgrounded; we
+    // re-acquire on the next visibility change.
     let wakeLock = null;
     async function requestWakeLock() {
       if (!('wakeLock' in navigator)) return;
       try {
         wakeLock = await navigator.wakeLock.request('screen');
-        // If the system drops the lock, forget our handle so we re-request it.
         wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } catch (_e) { wakeLock = null; }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!wakeLock) requestWakeLock();
+      if (!ws || ws.readyState === WebSocket.CLOSED) connectSocket();
+    });
+
+    // ---- Clock ------------------------------------------------------------
+    const bigclock = document.getElementById('bigclock');
+    const bigdate = document.getElementById('bigdate');
+    const clockEl = document.getElementById('clock');
+    function tickClock() {
+      const now = new Date();
+      const hhmm = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      bigclock.textContent = hhmm;
+      clockEl.textContent = hhmm;
+      bigdate.textContent = now.toLocaleDateString([], {
+        weekday: 'long', month: 'long', day: 'numeric',
+      });
+    }
+
+    // =======================================================================
+    // Train arrivals (Carroll St — F & G)
+    // =======================================================================
+    const trainLines = document.getElementById('trainLines');
+    const trainsFoot = document.getElementById('trainsFoot');
+    let lastTrains = null;       // last good payload from /trains
+    let lastTrainsAt = 0;
+
+    // Direction labels are station-specific. For Carroll St, N = uptown toward
+    // Manhattan/Queens, S = downtown into Brooklyn.
+    const DIR_LABELS = {
+      F: { N: 'Manhattan / Queens', S: 'Coney Island' },
+      G: { N: 'Court Sq (Queens)',  S: 'Church Av' },
+    };
+
+    async function loadTrains() {
+      try {
+        const res = await fetch('/trains?secret=' + encodeURIComponent(secret));
+        if (!res.ok) throw new Error('status ' + res.status);
+        const data = await res.json();
+        lastTrains = data;
+        lastTrainsAt = Date.now();
       } catch (_e) {
-        // Denied (e.g. low battery) — not fatal; the stream still runs.
-        wakeLock = null;
+        // keep showing last good data; renderTrains marks it stale
+      }
+      renderTrains();
+    }
+
+    // Group arrivals -> { F: {N:[mins], S:[mins]}, G: {...} } using live minutes
+    // recomputed from each train's absolute time so countdowns stay accurate
+    // between fetches.
+    function groupArrivals() {
+      const out = { F: { N: [], S: [] }, G: { N: [], S: [] } };
+      if (!lastTrains || !Array.isArray(lastTrains.arrivals)) return out;
+      const now = Date.now();
+      for (const a of lastTrains.arrivals) {
+        if (!out[a.route] || !out[a.route][a.direction]) continue;
+        const mins = Math.round((new Date(a.time).getTime() - now) / 60000);
+        if (mins < 0) continue;
+        out[a.route][a.direction].push(mins);
+      }
+      for (const r of ['F', 'G']) {
+        for (const d of ['N', 'S']) out[r][d].sort((x, y) => x - y);
+      }
+      return out;
+    }
+
+    function fmtTimes(mins) {
+      if (!mins.length) return '<span class="none">—</span>';
+      return mins.slice(0, 3).map((m, i) => {
+        const cls = (i === 0 && m <= 2) ? 'soon' : '';
+        const txt = m === 0 ? 'now' : m;
+        const suffix = m === 0 ? '' : '<span class="min"> min</span>';
+        return `<span class="${cls}">${txt}${suffix}</span>`;
+      }).join('<span class="min">, </span>');
+    }
+
+    function renderTrains() {
+      const g = groupArrivals();
+      trainLines.innerHTML = '';
+      for (const route of ['F', 'G']) {
+        const line = document.createElement('div');
+        line.className = 'line';
+        line.innerHTML = `
+          <div class="bullet ${route}">${route}</div>
+          <div class="dirs">
+            <div class="dir"><span class="label">↑ ${DIR_LABELS[route].N}</span>
+              <span class="times">${fmtTimes(g[route].N)}</span></div>
+            <div class="dir"><span class="label">↓ ${DIR_LABELS[route].S}</span>
+              <span class="times">${fmtTimes(g[route].S)}</span></div>
+          </div>`;
+        trainLines.appendChild(line);
+      }
+      renderMiniTrains(g);
+
+      // Footer: freshness. Mark stale if the last successful fetch is old.
+      const ageSec = lastTrainsAt ? Math.round((Date.now() - lastTrainsAt) / 1000) : null;
+      if (ageSec == null) {
+        trainsFoot.textContent = 'Train arrivals unavailable';
+        trainsFoot.classList.add('stale');
+      } else if (ageSec > 90) {
+        trainsFoot.textContent = `Last updated ${ageSec}s ago (reconnecting…)`;
+        trainsFoot.classList.add('stale');
+      } else {
+        trainsFoot.textContent = `Updated ${ageSec}s ago · live from MTA`;
+        trainsFoot.classList.remove('stale');
       }
     }
 
-    // When the page comes back to the foreground, re-arm the wake lock and,
-    // if the signaling socket dropped while backgrounded, reconnect right away
-    // instead of waiting for the periodic retry.
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible') return;
-      if (localStream && !wakeLock) requestWakeLock();
-      if (localStream && (!ws || ws.readyState === WebSocket.CLOSED)) connectSocket();
+    // Compact countdown chips for the streaming overlay: soonest each line.
+    function renderMiniTrains(g) {
+      miniTrains.innerHTML = '';
+      for (const route of ['F', 'G']) {
+        const up = g[route].N[0];
+        const down = g[route].S[0];
+        const parts = [];
+        if (up != null) parts.push('↑' + (up === 0 ? 'now' : up + 'm'));
+        if (down != null) parts.push('↓' + (down === 0 ? 'now' : down + 'm'));
+        if (!parts.length) continue;
+        const chip = document.createElement('span');
+        chip.className = 'mini';
+        chip.innerHTML = `<span class="b ${route}">${route}</span>${parts.join(' ')}`;
+        miniTrains.appendChild(chip);
+      }
+    }
+
+    // =======================================================================
+    // Schedule (auto on/off)
+    // =======================================================================
+    const SCHED_KEY = 'dogcam.schedule.v1';
+    const DEFAULT_SCHEDULE = { enabled: false, windows: [] };
+    let schedule = loadSchedule();
+    let scheduleSuppressed = false; // set when user manually stops mid-window
+
+    function loadSchedule() {
+      try {
+        const raw = localStorage.getItem(SCHED_KEY);
+        if (raw) {
+          const s = JSON.parse(raw);
+          if (s && Array.isArray(s.windows)) return s;
+        }
+      } catch (_e) {}
+      return JSON.parse(JSON.stringify(DEFAULT_SCHEDULE));
+    }
+    function saveSchedule() {
+      try { localStorage.setItem(SCHED_KEY, JSON.stringify(schedule)); } catch (_e) {}
+    }
+
+    function hmToMin(hm) {
+      const [h, m] = (hm || '0:0').split(':').map(Number);
+      return (h || 0) * 60 + (m || 0);
+    }
+    function minToLabel(min) {
+      const d = new Date(); d.setHours(Math.floor(min / 60), min % 60, 0, 0);
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    // Is `date` inside any enabled window right now?
+    function currentlyScheduled(date) {
+      if (!schedule.enabled) return false;
+      date = date || new Date();
+      const day = date.getDay();
+      const cur = date.getHours() * 60 + date.getMinutes();
+      return schedule.windows.some((w) => {
+        if (!w.days || !w.days.includes(day)) return false;
+        const start = hmToMin(w.start), end = hmToMin(w.end);
+        return start < end && cur >= start && cur < end;
+      });
+    }
+
+    // Find the next scheduled START time within the coming week, for status text.
+    function nextScheduledStart() {
+      if (!schedule.enabled || !schedule.windows.length) return null;
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      for (let offset = 0; offset < 8; offset++) {
+        const day = (now.getDay() + offset) % 7;
+        let best = null;
+        for (const w of schedule.windows) {
+          if (!w.days || !w.days.includes(day)) continue;
+          const start = hmToMin(w.start);
+          if (offset === 0 && start <= nowMin) continue;
+          if (best == null || start < best) best = start;
+        }
+        if (best != null) {
+          const d = new Date(now); d.setDate(now.getDate() + offset);
+          return { dayLabel: offset === 0 ? 'today' : (offset === 1 ? 'tomorrow' : DAY_ABBR[day]),
+                   timeLabel: minToLabel(best) };
+        }
+      }
+      return null;
+    }
+
+    const schedStatus = document.getElementById('schedStatus');
+    function updateScheduleStatus() {
+      if (!schedule.enabled) {
+        schedStatus.innerHTML = 'Schedule is <b>off</b>. Tap ⚙ to set auto-on times.';
+        return;
+      }
+      if (currentlyScheduled()) {
+        schedStatus.innerHTML = '<b>Scheduled window active.</b> The camera will turn on automatically.';
+      } else {
+        const next = nextScheduledStart();
+        schedStatus.innerHTML = next
+          ? `Schedule <b>on</b> · next start <b>${next.dayLabel} ${next.timeLabel}</b>.`
+          : 'Schedule <b>on</b>, but no upcoming windows are set.';
+      }
+    }
+
+    // The control loop: every 10s decide whether the camera should be running.
+    function scheduleTick() {
+      const inWin = currentlyScheduled();
+      if (!inWin) scheduleSuppressed = false; // reset suppression once window ends
+
+      if (inWin && !streaming && !scheduleSuppressed && !autoAttemptFailed) {
+        startCamera('schedule');
+      } else if (!inWin && streaming && startedBy === 'schedule') {
+        stopCamera();
+      }
+      updateScheduleStatus();
+    }
+
+    // ---- Settings UI ------------------------------------------------------
+    const settings = document.getElementById('settings');
+    const schedEnabled = document.getElementById('schedEnabled');
+    const windowList = document.getElementById('windowList');
+
+    document.getElementById('gearBtn').addEventListener('click', openSettings);
+    document.getElementById('doneBtn').addEventListener('click', closeSettings);
+    document.getElementById('addWindowBtn').addEventListener('click', () => {
+      schedule.windows.push({ days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00' });
+      saveSchedule(); renderWindows();
+    });
+    schedEnabled.addEventListener('change', () => {
+      schedule.enabled = schedEnabled.checked;
+      saveSchedule(); updateScheduleStatus(); scheduleTick();
     });
 
-    startBtn.addEventListener('click', start);
+    function openSettings() {
+      schedEnabled.checked = schedule.enabled;
+      renderWindows();
+      settings.classList.remove('hidden');
+    }
+    function closeSettings() {
+      settings.classList.add('hidden');
+      updateScheduleStatus();
+      scheduleTick();
+    }
 
-    // Belt-and-suspenders cleanup: close all peer connections if the page is
-    // unloaded so we don't leave half-open transports on mobile Safari.
+    function renderWindows() {
+      windowList.innerHTML = '';
+      if (!schedule.windows.length) {
+        const p = document.createElement('p');
+        p.className = 'hint';
+        p.textContent = 'No windows yet — add one to auto-start the camera.';
+        windowList.appendChild(p);
+      }
+      schedule.windows.forEach((w, idx) => {
+        const box = document.createElement('div');
+        box.className = 'window';
+
+        const days = document.createElement('div');
+        days.className = 'days';
+        DAY_ABBR.forEach((abbr, dayNum) => {
+          const b = document.createElement('button');
+          b.className = 'day' + (w.days.includes(dayNum) ? ' on' : '');
+          b.textContent = abbr[0];
+          b.title = abbr;
+          b.addEventListener('click', () => {
+            const i = w.days.indexOf(dayNum);
+            if (i >= 0) w.days.splice(i, 1); else w.days.push(dayNum);
+            saveSchedule(); renderWindows();
+          });
+          days.appendChild(b);
+        });
+        box.appendChild(days);
+
+        const row = document.createElement('div');
+        row.className = 'times-row';
+        const start = document.createElement('input');
+        start.type = 'time'; start.value = w.start;
+        start.addEventListener('change', () => { w.start = start.value; saveSchedule(); });
+        const to = document.createElement('span'); to.className = 'to'; to.textContent = 'to';
+        const end = document.createElement('input');
+        end.type = 'time'; end.value = w.end;
+        end.addEventListener('change', () => { w.end = end.value; saveSchedule(); });
+        const del = document.createElement('button');
+        del.className = 'del'; del.textContent = 'Remove';
+        del.addEventListener('click', () => {
+          schedule.windows.splice(idx, 1); saveSchedule(); renderWindows();
+        });
+        row.append(start, to, end, del);
+        box.appendChild(row);
+
+        windowList.appendChild(box);
+      });
+    }
+
+    // ---- Page lifecycle ---------------------------------------------------
     window.addEventListener('pagehide', () => {
-      Object.keys(peers).forEach(closePeer);
+      closeAllPeers();
       if (ws) try { ws.close(); } catch (_e) {}
       if (wakeLock) try { wakeLock.release(); } catch (_e) {} finally { wakeLock = null; }
     });
 
+    // ---- Boot -------------------------------------------------------------
     if (!secret) {
       startErr.textContent = 'Missing ?secret= token in the URL.';
       startBtn.disabled = true;
+    } else {
+      tickClock();
+      setInterval(tickClock, 1000);
+
+      renderTrains();
+      loadTrains();
+      setInterval(loadTrains, 30000);   // refetch arrivals every 30s
+      setInterval(renderTrains, 5000);  // recompute countdowns between fetches
+
+      updateScheduleStatus();
+      setInterval(scheduleTick, 10000); // schedule control loop
+
+      requestWakeLock();
+      loadIceConfig().then(connectSocket);
     }
   })();
   </script>
