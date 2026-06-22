@@ -232,8 +232,10 @@
         signal({ type: 'viewer-joined' });
       };
 
-      ws.onclose = () => {
-        setStatus('Disconnected', false);
+      ws.onclose = (event) => {
+        // Surface the raw close code/reason on screen — there's no devtools
+        // on a phone, so this is the only way to diagnose a failed handshake.
+        setStatus(`Disconnected (code ${event.code}${event.reason ? ': ' + event.reason : ''})`, false);
         closePeer();
         setTimeout(connectSocket, 2000);
       };

@@ -20,6 +20,8 @@
  */
 
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
@@ -32,7 +34,7 @@ const { WebSocketServer } = require('ws');
 // The shared secret. Pulled from the environment when available so the token
 // can be rotated without code changes, but falls back to a hardcoded constant
 // for zero-config local use, exactly as specified by the requirements.
-const STREAM_SECRET = process.env.STREAM_SECRET || 'MySuperSecretToken123';
+const STREAM_SECRET = process.env.STREAM_SECRET || 'CleoCam';
 
 const PORT = process.env.PORT || 3000;
 
@@ -41,6 +43,18 @@ const PORT = process.env.PORT || 3000;
 // not only from the machine it runs on. Override with HOST if you want to
 // restrict it.
 const HOST = process.env.HOST || '0.0.0.0';
+
+// Optional: terminate TLS directly in Node instead of relying on a reverse
+// proxy. This matters for tunnels like `tailscale serve` that proxy HTTP and
+// negotiate HTTP/2 with the client — some mobile browsers (notably iOS
+// Safari/WebKit) don't support WebSocket-over-HTTP/2 (RFC 8441 Extended
+// CONNECT), so the WS upgrade silently fails through that kind of proxy even
+// though plain GET requests work fine. Terminating TLS here means we only
+// ever speak plain HTTP/1.1, which WebSocket upgrades always work with. Pair
+// this with `tailscale serve --tcp` (raw TCP forward) instead of the default
+// HTTP forward. Leave TLS_CERT_FILE/TLS_KEY_FILE unset to keep plain HTTP.
+const TLS_CERT_FILE = process.env.TLS_CERT_FILE;
+const TLS_KEY_FILE = process.env.TLS_KEY_FILE;
 
 // ---------------------------------------------------------------------------
 // WebRTC ICE configuration
@@ -89,7 +103,15 @@ app.get('/ice-config', (req, res) => {
   res.json({ iceServers: ICE_SERVERS });
 });
 
-const server = http.createServer(app);
+// Plain HTTP by default; HTTPS (terminated here, HTTP/1.1 only) when cert/key
+// paths are provided. `https.createServer` never advertises HTTP/2 via ALPN
+// unless explicitly configured to, so WebSocket upgrades are unaffected.
+const server = (TLS_CERT_FILE && TLS_KEY_FILE)
+  ? https.createServer(
+      { cert: fs.readFileSync(TLS_CERT_FILE), key: fs.readFileSync(TLS_KEY_FILE) },
+      app,
+    )
+  : http.createServer(app);
 
 // ---------------------------------------------------------------------------
 // WebSocket signaling server
@@ -248,9 +270,10 @@ wss.on('connection', (ws) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Dog monitor signaling server listening on ${HOST}:${PORT}`);
-  console.log(`  Phone viewers : http://localhost:${PORT}/?secret=${STREAM_SECRET}`);
-  console.log(`  iPad camera   : http://localhost:${PORT}/camera.html?secret=${STREAM_SECRET}`);
+  const scheme = (TLS_CERT_FILE && TLS_KEY_FILE) ? 'https' : 'http';
+  console.log(`Dog monitor signaling server listening on ${HOST}:${PORT} (${scheme})`);
+  console.log(`  Phone viewers : ${scheme}://localhost:${PORT}/?secret=${STREAM_SECRET}`);
+  console.log(`  iPad camera   : ${scheme}://localhost:${PORT}/camera.html?secret=${STREAM_SECRET}`);
   if (ICE_SERVERS.length > 1) {
     console.log('  TURN relay    : configured (cellular without VPN supported)');
   } else {
