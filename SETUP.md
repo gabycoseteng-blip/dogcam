@@ -61,8 +61,9 @@ you should now see all three devices.
 
 ## Step 3 — Give the server an HTTPS address
 
-The iPad's browser will only allow camera access over **HTTPS**, so we let
-Tailscale put a real certificate in front of the server.
+The iPad's browser will only allow camera access over **HTTPS**. There are two
+ways to get HTTPS in front of the server — use **Option A** unless you hit the
+iOS WebSocket issue described below, in which case switch to **Option B**.
 
 1. In the admin console, enable **MagicDNS** and **HTTPS Certificates**
    (DNS settings page → "Enable HTTPS").
@@ -70,15 +71,63 @@ Tailscale put a real certificate in front of the server.
    ```bash
    tailscale status      # shows something like  dogcam-box.tailXXXX.ts.net
    ```
-3. Put HTTPS in front of the running server (it listens on port 3000):
+
+### Option A — `tailscale serve` HTTP forward (simplest)
+
+```bash
+tailscale serve --bg 3000
+```
+Your server is now reachable at `https://dogcam-box.tailXXXX.ts.net`.
+
+> **Known issue:** Tailscale's HTTP forward negotiates HTTP/2 with the
+> browser. iOS Safari/WebKit doesn't support WebSocket-over-HTTP/2 (RFC 8441
+> Extended CONNECT), so on an iPad the page can load fine (plain HTTP works)
+> but the WebSocket never connects — the status dot stays grey/"Disconnected"
+> with no console error. Desktop Chrome is unaffected because it falls back
+> correctly. **If this happens to you, use Option B instead.**
+
+### Option B — raw TCP forward + TLS in Node (fixes the iOS issue)
+
+This has the server terminate TLS itself, so the connection only ever speaks
+plain HTTP/1.1 — no HTTP/2, no Extended CONNECT problem, works on every
+browser including iOS Safari.
+
+1. Get a certificate for your Tailscale hostname (run once; renews itself):
    ```bash
-   sudo tailscale serve --bg https / http://localhost:3000
+   tailscale cert dogcam-box.tailXXXX.ts.net
    ```
-   Your server is now reachable at:
+   This writes `dogcam-box.tailXXXX.ts.net.crt` and `.key` in the current
+   folder. Move them somewhere stable, e.g. `C:\dogcam-certs\` on Windows or
+   `~/dogcam-certs/` on Mac/Linux.
+
+2. Reset any previous HTTP forward and switch to a raw TCP forward instead:
+   ```bash
+   tailscale serve reset
+   tailscale serve --bg --tcp 443 tcp://127.0.0.1:3443
    ```
-   https://dogcam-box.tailXXXX.ts.net
+
+3. Restart the server pointed at the cert, listening on the port you just
+   forwarded to (3443):
+   ```bash
+   # Windows PowerShell
+   $env:STREAM_SECRET="YOUR_SECRET"
+   $env:PORT="3443"
+   $env:TLS_CERT_FILE="C:\dogcam-certs\dogcam-box.tailXXXX.ts.net.crt"
+   $env:TLS_KEY_FILE="C:\dogcam-certs\dogcam-box.tailXXXX.ts.net.key"
+   npm start
    ```
-   (use your own name from step 2).
+   ```bash
+   # Mac/Linux
+   STREAM_SECRET=YOUR_SECRET PORT=3443 \
+   TLS_CERT_FILE=~/dogcam-certs/dogcam-box.tailXXXX.ts.net.crt \
+   TLS_KEY_FILE=~/dogcam-certs/dogcam-box.tailXXXX.ts.net.key \
+   npm start
+   ```
+   The console will print `(https)` confirming TLS is on.
+
+4. Your server is reachable the same way as before, at
+   `https://dogcam-box.tailXXXX.ts.net` — Tailscale just forwards the raw
+   bytes through to port 3443 now instead of proxying HTTP itself.
 
 ---
 

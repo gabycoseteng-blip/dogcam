@@ -78,6 +78,8 @@ private, recommended for a personal "just me" dog cam).
 | `TURN_URL` | — | Optional TURN relay URL, e.g. `turn:host:3478`. Needed for cellular **without** a VPN. |
 | `TURN_USERNAME` | — | TURN username (if `TURN_URL` set). |
 | `TURN_CREDENTIAL` | — | TURN password (if `TURN_URL` set). |
+| `TLS_CERT_FILE` | — | Path to a TLS certificate. When set with `TLS_KEY_FILE`, the server terminates HTTPS itself (HTTP/1.1 only — no HTTP/2), bypassing reverse-proxy issues like iOS Safari failing WebSocket-over-HTTP/2 through `tailscale serve`. |
+| `TLS_KEY_FILE` | — | Path to the matching TLS private key. |
 
 The clients fetch their ICE/TURN list from the authenticated `/ice-config`
 endpoint at startup, so STUN/TURN setup lives only in the server's environment.
