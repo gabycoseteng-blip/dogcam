@@ -1,9 +1,12 @@
 # 🐶 Dog Cam
 
 A secure, minimal multi-client dog monitoring system. One stationary **iPad**
-acts as the camera and streams **live back-camera video + microphone audio**
-peer-to-peer to **up to two phones** at once. The Node.js server only brokers
-the WebRTC handshake — it never sees or stores any media.
+acts as the camera and streams **live video + microphone audio** peer-to-peer
+to **up to two phones** at once. The Node.js server only brokers the WebRTC
+handshake — it never sees or stores any media. The iPad uses its **front
+camera by default** (so it can face the room while propped face-up), and a
+**Flip** button in the live overlay switches to the back camera on the fly;
+the choice is remembered per device.
 
 The iPad page doubles as an **always-on kiosk dashboard**: when the camera is
 off it shows a big clock and **live F/G train countdowns for the Carroll St
