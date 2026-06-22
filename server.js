@@ -26,6 +26,7 @@ const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
+const GtfsRt = require('gtfs-realtime-bindings');
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -93,6 +94,111 @@ function buildIceServers() {
 const ICE_SERVERS = buildIceServers();
 
 // ---------------------------------------------------------------------------
+// MTA real-time train arrivals (Carroll St — F & G)
+// ---------------------------------------------------------------------------
+// The iPad dashboard shows live "T-minus X min" countdowns for the next trains
+// at the Carroll St station. The MTA publishes GTFS-realtime protobuf feeds
+// (no API key required since 2021). We fetch them HERE, server-side, and expose
+// a small JSON summary at /trains so the browser never has to decode protobuf
+// or learn the feed URLs. Results are cached briefly to be a good MTA citizen.
+//
+// Carroll St is stop "F21" (F21N = Manhattan/Queens-bound, F21S = Brooklyn-bound)
+// and is served by both the F (on the BDFM feed) and the G (on its own feed).
+// All three are overridable via env vars so the same code can power another
+// station without edits.
+const TRAIN_FEEDS = (process.env.TRAIN_FEEDS ||
+  'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm,' +
+  'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-g'
+).split(',').map((s) => s.trim()).filter(Boolean);
+
+const TRAIN_STOP_PREFIX = process.env.TRAIN_STOP_ID || 'F21';
+const TRAIN_ROUTES = new Set(
+  (process.env.TRAIN_ROUTES || 'F,G').split(',').map((s) => s.trim()).filter(Boolean),
+);
+const TRAIN_CACHE_MS = 20000;            // serve cached arrivals for ~20s
+const TRAIN_FETCH_TIMEOUT_MS = 8000;     // give up on a slow feed
+
+let trainCache = { at: 0, data: null };
+
+// Fetch one GTFS-realtime feed and decode it into a FeedMessage. Bounded by an
+// AbortController so a hung MTA endpoint can't stall the /trains request.
+async function fetchFeed(url) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TRAIN_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'dogcam/1.0 (+train-arrivals)' },
+    });
+    if (!res.ok) throw new Error(`feed responded ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    return GtfsRt.transit_realtime.FeedMessage.decode(buf);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// protobufjs surfaces int64 fields (like arrival.time) as Long objects. Coerce
+// them — and plain numbers — to a JS number of epoch seconds.
+function toSeconds(t) {
+  if (t == null) return null;
+  if (typeof t === 'number') return t;
+  if (typeof t.toNumber === 'function') return t.toNumber();
+  return Number(t);
+}
+
+// Pull every upcoming F/G arrival at the Carroll St platforms out of the feeds
+// and return them as a sorted, JSON-friendly list. Each entry is one train:
+//   { route: 'F'|'G', direction: 'N'|'S', minutes, time(ISO) }
+async function getTrainArrivals() {
+  const now = Date.now();
+  if (trainCache.data && now - trainCache.at < TRAIN_CACHE_MS) {
+    return trainCache.data;
+  }
+
+  const results = await Promise.allSettled(TRAIN_FEEDS.map(fetchFeed));
+  if (!results.some((r) => r.status === 'fulfilled')) {
+    throw new Error('all train feeds failed');
+  }
+
+  const arrivals = [];
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue;
+    for (const entity of r.value.entity || []) {
+      const tu = entity.tripUpdate;
+      if (!tu || !tu.trip) continue;
+      const route = tu.trip.routeId;
+      if (!TRAIN_ROUTES.has(route)) continue;
+
+      for (const stu of tu.stopTimeUpdate || []) {
+        const stopId = stu.stopId || '';
+        if (!stopId.startsWith(TRAIN_STOP_PREFIX)) continue;
+        const direction = stopId.slice(-1); // 'N' (uptown) or 'S' (downtown)
+        if (direction !== 'N' && direction !== 'S') continue;
+
+        const sec = toSeconds((stu.arrival && stu.arrival.time) ||
+                              (stu.departure && stu.departure.time));
+        if (!sec) continue;
+
+        const minutes = (sec * 1000 - now) / 60000;
+        if (minutes < -1) continue; // already departed
+        arrivals.push({
+          route,
+          direction,
+          minutes: Math.max(0, Math.round(minutes)),
+          time: new Date(sec * 1000).toISOString(),
+        });
+      }
+    }
+  }
+
+  arrivals.sort((a, b) => a.minutes - b.minutes);
+  const data = { updatedAt: new Date(now).toISOString(), stop: TRAIN_STOP_PREFIX, arrivals };
+  trainCache = { at: now, data };
+  return data;
+}
+
+// ---------------------------------------------------------------------------
 // Express — static asset serving
 // ---------------------------------------------------------------------------
 
@@ -114,6 +220,20 @@ app.get('/ice-config', (req, res) => {
     return res.status(401).json({ error: 'unauthorized' });
   }
   res.json({ iceServers: ICE_SERVERS });
+});
+
+// Live train arrivals for the iPad dashboard / phone viewers. Same shared
+// secret as everything else so the endpoint isn't an open proxy. On total feed
+// failure we return 502 and let the client keep showing its last good data.
+app.get('/trains', async (req, res) => {
+  if (!isValidSecret(req.query.secret)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    res.json(await getTrainArrivals());
+  } catch (_err) {
+    res.status(502).json({ error: 'train_feed_unavailable' });
+  }
 });
 
 // Plain HTTP by default; HTTPS (terminated here, HTTP/1.1 only) when cert/key
@@ -228,10 +348,20 @@ wss.on('connection', (ws) => {
         break;
       }
 
-      // The iPad identifies itself as the camera (optional, informational).
+      // The iPad announces it is online / has (re)started streaming. We tag the
+      // sender as the camera AND relay the announcement to every other peer so
+      // viewers can (re)send `viewer-joined` and get a fresh offer. This is what
+      // lets phones recover automatically after the camera is stopped and
+      // started again (manually or by the schedule) without a page reload.
       case 'camera-ready': {
         const me = clients.get(id);
         if (me) me.role = 'camera';
+        for (const [otherId, other] of clients) {
+          if (otherId === id) continue;
+          if (other.ws.readyState === other.ws.OPEN) {
+            other.ws.send(JSON.stringify({ type: 'camera-ready', from: id }));
+          }
+        }
         break;
       }
 

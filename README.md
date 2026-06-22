@@ -5,6 +5,35 @@ acts as the camera and streams **live back-camera video + microphone audio**
 peer-to-peer to **up to two phones** at once. The Node.js server only brokers
 the WebRTC handshake — it never sees or stores any media.
 
+The iPad page doubles as an **always-on kiosk dashboard**: when the camera is
+off it shows a big clock and **live F/G train countdowns for the Carroll St
+station** ("↑ Manhattan 4 min, ↓ Brooklyn 7 min"). You can turn the camera on
+by hand, or set an **auto-on schedule** so it starts and stops itself during
+the time windows you choose.
+
+## Camera modes
+
+- **Manual:** tap **Start Camera** on the iPad; tap **Stop** to return to the
+  dashboard.
+- **Scheduled:** open ⚙ and add one or more windows (days + start/end time).
+  The camera turns on automatically inside a window and off when it ends. The
+  schedule lives in the iPad's `localStorage`.
+  - iOS only grants camera access after a user gesture, so for unattended
+    scheduled starts **start the camera by hand once** to grant permission and
+    keep the iPad on this page. If a scheduled start still needs a tap, the
+    screen shows a one-tap "Start scheduled session" prompt instead of failing.
+  - Manually tapping **Stop** during a window keeps it off until the window ends.
+
+## Train arrivals
+
+Both the iPad dashboard and the phone viewer show the next F and G trains at
+**Carroll St** (GTFS stop `F21`). The server fetches the MTA's GTFS-realtime
+protobuf feeds (BDFM for the F, plus the G feed — no API key required),
+decodes them, and exposes a small JSON summary at **`/trains`** (cached ~20s).
+The browser never touches protobuf or the feed URLs. The station, routes and
+feed URLs are configurable via env vars (see the table below) so the same code
+can power a different stop.
+
 ## Architecture
 
 ```
@@ -96,6 +125,9 @@ See **[SETUP.md](./SETUP.md)** for two click-by-click guides:
 | `TURN_CREDENTIAL` | — | TURN password (if `TURN_URL` set). |
 | `TLS_CERT_FILE` | — | Path to a TLS certificate. When set with `TLS_KEY_FILE`, the server terminates HTTPS itself (HTTP/1.1 only — no HTTP/2), bypassing reverse-proxy issues like iOS Safari failing WebSocket-over-HTTP/2 through `tailscale serve`. |
 | `TLS_KEY_FILE` | — | Path to the matching TLS private key. |
+| `TRAIN_STOP_ID` | `F21` | GTFS stop-id prefix to report arrivals for (`F21` = Carroll St; `F21N`/`F21S` are its two directions). |
+| `TRAIN_ROUTES` | `F,G` | Comma-separated GTFS route ids to include. |
+| `TRAIN_FEEDS` | BDFM + G feeds | Comma-separated GTFS-realtime feed URLs to poll. Defaults to the MTA BDFM and G feeds. |
 
 The clients fetch their ICE/TURN list from the authenticated `/ice-config`
 endpoint at startup, so STUN/TURN setup lives only in the server's environment.

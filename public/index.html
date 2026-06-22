@@ -71,6 +71,21 @@
     }
     .hidden { display: none !important; }
     .err { color: #ff453a; font-size: 14px; max-width: 320px; }
+    .trainstrip {
+      flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+      padding: 8px 14px; border-bottom: 1px solid #1c1c1e;
+      background: #0c0c0d; font-size: 13px; overflow-x: auto;
+      -webkit-overflow-scrolling: touch; white-space: nowrap;
+    }
+    .trainstrip .label { color: #6e6e73; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .trainstrip .mini { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+    .trainstrip .b {
+      width: 22px; height: 22px; border-radius: 50%; color: #fff;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 12px;
+    }
+    .trainstrip .b.F { background: #ff6319; } .trainstrip .b.G { background: #6cbe45; }
+    .trainstrip .none { color: #5a5a5e; }
     .setup {
       position: absolute; inset: 0; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 12px;
@@ -94,6 +109,11 @@
     <span id="statusDot" class="dot"></span>
     <h1>Dog Cam · Live</h1>
   </header>
+
+  <div class="trainstrip" id="trainstrip">
+    <span class="label">Carroll St</span>
+    <span id="trainsMini" class="none">…</span>
+  </div>
 
   <div class="stage">
     <video id="remote" autoplay playsinline></video>
@@ -305,6 +325,13 @@
             myId = msg.id;
             break;
 
+          // The camera came online or (re)started streaming — (re)announce so
+          // it builds a fresh connection to us. Lets phones recover after the
+          // camera is stopped/started by hand or by its schedule.
+          case 'camera-ready':
+            signal({ type: 'viewer-joined' });
+            break;
+
           case 'offer':
             await handleOffer(msg.from, msg.sdp);
             break;
@@ -338,6 +365,52 @@
       if (ws) try { ws.close(); } catch (_e) {}
     });
 
+    // ---- Carroll St train arrivals (F & G) --------------------------------
+    // Compact strip mirroring the iPad dashboard so the dog-walker can see the
+    // next F/G trains while watching. Data comes from the same /trains endpoint.
+    const trainsMini = document.getElementById('trainsMini');
+    let lastTrains = null;
+
+    async function loadTrains() {
+      try {
+        const res = await fetch('/trains?secret=' + encodeURIComponent(secret));
+        if (res.ok) lastTrains = await res.json();
+      } catch (_e) { /* keep last good data */ }
+      renderTrains();
+    }
+
+    function renderTrains() {
+      if (!lastTrains || !Array.isArray(lastTrains.arrivals)) {
+        trainsMini.textContent = 'arrivals unavailable';
+        trainsMini.className = 'none';
+        return;
+      }
+      const now = Date.now();
+      const g = { F: { N: [], S: [] }, G: { N: [], S: [] } };
+      for (const a of lastTrains.arrivals) {
+        if (!g[a.route] || !g[a.route][a.direction]) continue;
+        const m = Math.round((new Date(a.time).getTime() - now) / 60000);
+        if (m >= 0) g[a.route][a.direction].push(m);
+      }
+      trainsMini.className = '';
+      trainsMini.innerHTML = '';
+      let any = false;
+      for (const route of ['F', 'G']) {
+        for (const d of ['N', 'S']) g[route][d].sort((x, y) => x - y);
+        const up = g[route].N[0], down = g[route].S[0];
+        const parts = [];
+        if (up != null) parts.push('↑' + (up === 0 ? 'now' : up + 'm'));
+        if (down != null) parts.push('↓' + (down === 0 ? 'now' : down + 'm'));
+        if (!parts.length) continue;
+        any = true;
+        const chip = document.createElement('span');
+        chip.className = 'mini';
+        chip.innerHTML = `<span class="b ${route}">${route}</span>${parts.join(' ')}`;
+        trainsMini.appendChild(chip);
+      }
+      if (!any) { trainsMini.textContent = 'no upcoming trains'; trainsMini.className = 'none'; }
+    }
+
     // ---- First-run secret prompt ------------------------------------------
     const setupOverlay = document.getElementById('setupOverlay');
     const secretInput = document.getElementById('secretInput');
@@ -349,6 +422,10 @@
       waitText.textContent = 'Connecting to the camera…';
       // Fetch ICE/TURN config first, then connect and announce ourselves.
       loadIceConfig().then(connectSocket);
+      // Train arrivals run independently of the video connection.
+      loadTrains();
+      setInterval(loadTrains, 30000);
+      setInterval(renderTrains, 5000);
     }
 
     function saveSecret() {
