@@ -34,7 +34,7 @@ const { WebSocketServer } = require('ws');
 // The shared secret. Pulled from the environment when available so the token
 // can be rotated without code changes, but falls back to a hardcoded constant
 // for zero-config local use, exactly as specified by the requirements.
-const STREAM_SECRET = process.env.STREAM_SECRET || 'MySuperSecretToken123';
+const STREAM_SECRET = process.env.STREAM_SECRET || 'CleoCam';
 
 const PORT = process.env.PORT || 3000;
 
