@@ -57,6 +57,19 @@ const HOST = process.env.HOST || '0.0.0.0';
 const TLS_CERT_FILE = process.env.TLS_CERT_FILE;
 const TLS_KEY_FILE = process.env.TLS_KEY_FILE;
 
+// Optional: Cloudflare Realtime TURN. Unlike a static-credential provider
+// (Metered, Twilio), Cloudflare hands out SHORT-LIVED credentials minted on
+// demand through its API, so instead of a fixed username/password we store the
+// Turn Token ID + API token and generate fresh credentials per /ice-config
+// request. Cloudflare's free allowance (1,000 GB/month, shared with their SFU)
+// dwarfs typical free TURN caps, which makes it a good fit for lots of cellular
+// dog-watching. Leave these unset to keep using static TURN_URL/USERNAME/etc.
+const CF_TURN_TOKEN_ID = process.env.CF_TURN_TOKEN_ID;
+const CF_TURN_API_TOKEN = process.env.CF_TURN_API_TOKEN;
+// How long each minted credential stays valid. A day is plenty: the page only
+// needs it for the lifetime of a viewing session and refetches on next launch.
+const CF_TURN_TTL = Number(process.env.CF_TURN_TTL || 86400);
+
 // ---------------------------------------------------------------------------
 // WebRTC ICE configuration
 // ---------------------------------------------------------------------------
@@ -92,6 +105,52 @@ function buildIceServers() {
 }
 
 const ICE_SERVERS = buildIceServers();
+
+// Whether Cloudflare TURN is configured. When it is, /ice-config mints fresh
+// credentials on each request and appends Cloudflare's relay to the static list.
+const CF_TURN_ENABLED = Boolean(CF_TURN_TOKEN_ID && CF_TURN_API_TOKEN);
+
+/**
+ * Ask Cloudflare to mint a short-lived TURN credential and return an iceServers
+ * entry ({ urls, username, credential }) ready to hand to the browser. Returns
+ * null on any failure so the caller can fall back to the static ICE list rather
+ * than breaking the page. Requires Node 18+ (built-in global fetch).
+ */
+async function getCloudflareIceServers() {
+  if (!CF_TURN_ENABLED) return null;
+  const endpoint =
+    `https://rtc.live.cloudflare.com/v1/turn/keys/${CF_TURN_TOKEN_ID}/credentials/generate`;
+  // Bound the request so a slow/unreachable Cloudflare never hangs /ice-config.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CF_TURN_API_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ttl: CF_TURN_TTL }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      console.error(`Cloudflare TURN: credential request failed (HTTP ${resp.status})`);
+      return null;
+    }
+    const data = await resp.json();
+    // Cloudflare returns { iceServers: { urls: [...], username, credential } }.
+    if (!data || !data.iceServers || !data.iceServers.urls) {
+      console.error('Cloudflare TURN: unexpected response shape');
+      return null;
+    }
+    return data.iceServers;
+  } catch (err) {
+    console.error(`Cloudflare TURN: ${err.name === 'AbortError' ? 'timed out' : err.message}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // MTA real-time train arrivals (Carroll St — F & G)
@@ -215,11 +274,20 @@ app.get('/healthz', (_req, res) => res.json({ ok: true, clients: clients.size })
 // STUN/TURN setup lives in one place (the server env) instead of being
 // hardcoded in each HTML file. Requires the same shared secret so TURN
 // credentials are never handed to an unauthenticated caller.
-app.get('/ice-config', (req, res) => {
+app.get('/ice-config', async (req, res) => {
   if (!isValidSecret(req.query.secret)) {
     return res.status(401).json({ error: 'unauthorized' });
   }
-  res.json({ iceServers: ICE_SERVERS });
+  // Start from the static list (Google STUN + any static TURN_URL provider).
+  const iceServers = [...ICE_SERVERS];
+  // If Cloudflare TURN is configured, mint a fresh short-lived credential and
+  // append it. On any failure we silently fall back to the static list so the
+  // page still loads (it just won't have the Cloudflare relay this time).
+  if (CF_TURN_ENABLED) {
+    const cf = await getCloudflareIceServers();
+    if (cf) iceServers.push(cf);
+  }
+  res.json({ iceServers });
 });
 
 // Live train arrivals for the iPad dashboard / phone viewers. Same shared
@@ -417,7 +485,9 @@ server.listen(PORT, HOST, () => {
   console.log(`Dog monitor signaling server listening on ${HOST}:${PORT} (${scheme})`);
   console.log(`  Phone viewers : ${scheme}://localhost:${PORT}/?secret=${STREAM_SECRET}`);
   console.log(`  iPad camera   : ${scheme}://localhost:${PORT}/camera.html?secret=${STREAM_SECRET}`);
-  if (ICE_SERVERS.length > 1) {
+  if (CF_TURN_ENABLED) {
+    console.log('  TURN relay    : Cloudflare (short-lived creds, cellular supported)');
+  } else if (ICE_SERVERS.length > 1) {
     console.log('  TURN relay    : configured (cellular without VPN supported)');
   } else {
     console.log('  TURN relay    : none (use same network or a VPN like Tailscale)');

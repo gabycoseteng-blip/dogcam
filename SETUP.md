@@ -228,7 +228,23 @@ links below as `?secret=...`.
 ### Step 3 — Turn on cellular support (TURN)
 
 Cellular networks block direct phone-to-phone video, so you need a **TURN
-relay**. The free tier of a managed provider is plenty for one dog cam:
+relay**. Pick **one** of the two free options below.
+
+#### Option A — Cloudflare Realtime TURN (recommended)
+
+Cloudflare's free allowance is **1,000 GB/month** — roughly 2,000× the typical
+managed free tier, so you'll effectively never run out for a personal dog cam.
+The server generates short-lived credentials automatically, so you only paste
+two values.
+
+1. Create a free **Cloudflare** account → **Realtime** → **TURN** → **Create**.
+   It gives you a **Turn Token ID** and an **API token**.
+2. Back in Render → your service → **Environment**, set:
+   - `CF_TURN_TOKEN_ID` = the Turn Token ID
+   - `CF_TURN_API_TOKEN` = the API token
+3. **Save** — Render redeploys automatically. That's it; no URLs to copy.
+
+#### Option B — Metered (or another static-credential provider)
 
 1. Sign up at <https://www.metered.ca/tools/openrelay/> (or
    <https://dashboard.metered.ca>) and create a free TURN app. It gives you a
@@ -245,8 +261,9 @@ relay**. The free tier of a managed provider is plenty for one dog cam:
      cellular and public wifi.)
 3. **Save** — Render redeploys automatically.
 
-> Only ever watch on your home wifi? You can skip this step entirely; STUN
-> (built in) is enough on the same network.
+> You can set both — the server advertises Cloudflare *and* the static relay and
+> the browser picks whichever connects. Only ever watch on your home wifi? You
+> can skip this step entirely; STUN (built in) is enough on the same network.
 
 ### Step 4 — Open the links once, then add to the home screen
 
@@ -288,6 +305,8 @@ After this, **all you do is tap the home-screen icon**:
   see "Connecting…" right after opening the camera page, give it a minute for
   the first wake-up, or upgrade to Render's cheapest paid plan to keep it always
   on.
-- Free TURN tiers have a monthly data cap (Metered's is generous for one cam).
-  Note that TURN is only used as a fallback when direct P2P fails — much of the
-  time on wifi you won't touch it at all.
+- Free TURN tiers have a monthly data cap. Cloudflare's (Option A) is **1,000
+  GB/month** — effectively unlimited for one cam; Metered's free tier is 500
+  MB/month, enough for occasional cellular use. Either way, TURN is only used as
+  a fallback when direct P2P fails — much of the time on wifi you won't touch it
+  at all, so it doesn't count against the cap.
