@@ -162,6 +162,9 @@ See **[SETUP.md](./SETUP.md)** for two click-by-click guides:
 | `TURN_URL` | — | Optional TURN relay URL(s). Needed for cellular **without** a VPN. Accepts a single URL (`turn:host:3478`) or a comma-separated list to advertise several transports at once (`turn:host:3478,turn:host:443?transport=tcp,turns:host:443?transport=tcp`) — the extra TCP/TLS/443 entries are what make cellular and locked-down wifi work. |
 | `TURN_USERNAME` | — | TURN username (if `TURN_URL` set). |
 | `TURN_CREDENTIAL` | — | TURN password (if `TURN_URL` set). |
+| `CF_TURN_TOKEN_ID` | — | Cloudflare Realtime TURN **Turn Token ID**. When set with `CF_TURN_API_TOKEN`, the server mints **short-lived** TURN credentials per `/ice-config` request — no static username/password needed. Cloudflare's free allowance (1,000 GB/month) is far larger than typical free TURN tiers. Used in addition to any static `TURN_URL`. |
+| `CF_TURN_API_TOKEN` | — | Cloudflare API token paired with `CF_TURN_TOKEN_ID`. |
+| `CF_TURN_TTL` | `86400` | Lifetime (seconds) of each minted Cloudflare credential. |
 | `TLS_CERT_FILE` | — | Path to a TLS certificate. When set with `TLS_KEY_FILE`, the server terminates HTTPS itself (HTTP/1.1 only — no HTTP/2), bypassing reverse-proxy issues like iOS Safari failing WebSocket-over-HTTP/2 through `tailscale serve`. |
 | `TLS_KEY_FILE` | — | Path to the matching TLS private key. |
 | `TRAIN_STOP_ID` | `F21` | GTFS stop-id prefix to report arrivals for (`F21` = Carroll St; `F21N`/`F21S` are its two directions). |
