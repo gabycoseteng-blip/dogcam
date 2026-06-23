@@ -28,6 +28,20 @@
       border-bottom: 1px solid #1c1c1e; flex: 0 0 auto;
     }
     header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+    header .spacer { flex: 1; }
+    .hbtn {
+      appearance: none; border: 1px solid #2c2c2e; border-radius: 999px;
+      background: #1c1c1e; color: #f2f2f2; font-size: 13px; font-weight: 600;
+      padding: 7px 12px; cursor: pointer; flex: 0 0 auto;
+    }
+    .hbtn:active { transform: scale(0.97); }
+    .hbtn.on { background: #0a84ff; border-color: #0a84ff; color: #fff; }
+    .toast {
+      position: absolute; top: 54px; left: 50%; transform: translateX(-50%);
+      background: rgba(255,159,10,0.96); color: #1a1a00; font-weight: 700;
+      padding: 9px 16px; border-radius: 999px; font-size: 14px; z-index: 9;
+      box-shadow: 0 6px 22px rgba(0,0,0,0.45); pointer-events: none;
+    }
     .dot {
       width: 10px; height: 10px; border-radius: 50%; background: #555; flex: 0 0 auto;
     }
@@ -108,6 +122,9 @@
   <header>
     <span id="statusDot" class="dot"></span>
     <h1>Dog Cam · Live</h1>
+    <span class="spacer"></span>
+    <button id="pipBtn" class="hbtn hidden" title="Picture in picture">⧉ PiP</button>
+    <button id="alertsBtn" class="hbtn" title="Notify me when the camera turns on/off or hears barking">🔔 Alerts</button>
   </header>
 
   <div class="trainstrip" id="trainstrip">
@@ -119,6 +136,7 @@
     <video id="remote" autoplay playsinline></video>
 
     <div class="statusbar" id="statusbar">Connecting…</div>
+    <div id="toast" class="toast hidden"></div>
 
     <div class="overlay" id="waitOverlay">
       <div class="spinner"></div>
@@ -200,14 +218,38 @@
     const waitText = document.getElementById('waitText');
     const errText = document.getElementById('errText');
     const tapOverlay = document.getElementById('tapOverlay');
+    const pipBtn = document.getElementById('pipBtn');
+    const alertsBtn = document.getElementById('alertsBtn');
+    const toast = document.getElementById('toast');
 
     function setStatus(text, live) {
       statusbar.textContent = text;
       statusDot.classList.toggle('live', !!live);
     }
 
+    let toastTimer = null;
+    function flashToast(text) {
+      toast.textContent = text;
+      toast.classList.remove('hidden');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.add('hidden'), 3500);
+    }
+
     function signal(obj) {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    }
+
+    // Debounced re-announce: if our peer connection is wedged, prod the camera
+    // to rebuild it (it re-offers on a fresh viewer-joined) rather than sitting
+    // on a dead ICE path.
+    let reannounceTimer = null;
+    function scheduleReannounce() {
+      if (reannounceTimer) return;
+      reannounceTimer = setTimeout(() => {
+        reannounceTimer = null;
+        if (pc && pc.connectionState === 'connected') return;
+        signal({ type: 'viewer-joined' });
+      }, 3000);
     }
 
     // ---- Memory management ------------------------------------------------
@@ -255,10 +297,17 @@
       };
 
       pc.onconnectionstatechange = () => {
-        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+        const st = pc.connectionState;
+        if (st === 'connected') {
+          waitOverlay.classList.add('hidden');
+          setStatus('Live', true);
+        } else if (st === 'failed' || st === 'disconnected') {
           setStatus('Camera connection lost', false);
           waitOverlay.classList.remove('hidden');
           waitText.textContent = 'Reconnecting to the camera…';
+          // Self-heal: ask the camera to rebuild our connection if it doesn't
+          // recover on its own shortly. The camera re-offers on a re-announce.
+          scheduleReannounce();
         }
       };
 
@@ -296,11 +345,13 @@
     });
 
     // ---- WebSocket wiring --------------------------------------------------
+    let wsBackoff = 1000; // grows on repeated failures, resets on a clean open
     function connectSocket() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}/?secret=${encodeURIComponent(secret)}`);
 
       ws.onopen = () => {
+        wsBackoff = 1000;
         setStatus('Waiting for camera…', false);
         // Announce ourselves so the camera opens a connection to us.
         signal({ type: 'viewer-joined' });
@@ -311,7 +362,8 @@
         // on a phone, so this is the only way to diagnose a failed handshake.
         setStatus(`Disconnected (code ${event.code}${event.reason ? ': ' + event.reason : ''})`, false);
         closePeer();
-        setTimeout(connectSocket, 2000);
+        setTimeout(connectSocket, wsBackoff);
+        wsBackoff = Math.min(wsBackoff * 2, 15000); // exponential backoff, capped
       };
 
       ws.onerror = () => setStatus('Connection error', false);
@@ -334,6 +386,27 @@
 
           case 'offer':
             await handleOffer(msg.from, msg.sdp);
+            break;
+
+          // The camera reported its on/off state — surface it and notify.
+          case 'cam-state':
+            if (msg.on) {
+              setStatus('Camera turned on', false);
+              flashToast('🟢 Camera on');
+              notify('🐶 Dog Cam', 'Camera is now ON', 'cam-state');
+            } else {
+              setStatus('Camera turned off', false);
+              flashToast('⚫️ Camera off');
+              notify('🐶 Dog Cam', 'Camera turned OFF', 'cam-state');
+            }
+            break;
+
+          // An alert from the camera (e.g. it heard barking).
+          case 'alert':
+            if (msg.kind === 'bark') {
+              flashToast('🔔 Barking detected');
+              notify('🐶 Dog Cam', 'Barking detected', 'bark');
+            }
             break;
 
           case 'ice-candidate':
@@ -411,6 +484,117 @@
       if (!any) { trainsMini.textContent = 'no upcoming trains'; trainsMini.className = 'none'; }
     }
 
+    // ---- Notifications & Web Push -----------------------------------------
+    // "🔔 Alerts" asks for notification permission (required by iOS to be a
+    // user gesture) and, when possible, registers a Web Push subscription so
+    // the phone is notified about camera on/off and barking EVEN WHEN THE APP
+    // IS CLOSED. While the app is open, the WS `cam-state`/`alert` handlers
+    // above show an immediate in-app notification regardless of push support.
+    let swReg = null;
+    const PUSH = { enabled: false, key: null };
+
+    async function registerServiceWorker() {
+      if (!('serviceWorker' in navigator)) return;
+      try { swReg = await navigator.serviceWorker.register('/sw.js'); } catch (_e) { swReg = null; }
+    }
+
+    async function loadPushKey() {
+      try {
+        const res = await fetch('/push/key?secret=' + encodeURIComponent(secret));
+        if (res.ok) {
+          const d = await res.json();
+          PUSH.enabled = !!d.enabled;
+          PUSH.key = d.key || null;
+        }
+      } catch (_e) { /* push optional */ }
+    }
+
+    // Prefer the service worker's notification (works in installed iOS PWAs);
+    // fall back to the page Notification constructor elsewhere.
+    async function notify(title, body, tag) {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      try {
+        const reg = swReg || (navigator.serviceWorker && await navigator.serviceWorker.getRegistration());
+        if (reg) { reg.showNotification(title, { body, tag, icon: '/icons/icon-192.png' }); return; }
+        new Notification(title, { body, tag });
+      } catch (_e) {}
+    }
+
+    function urlBase64ToUint8Array(base64) {
+      const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+      const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(b64);
+      const out = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+      return out;
+    }
+    function sameKey(buf, u8) {
+      const a = new Uint8Array(buf);
+      if (a.length !== u8.length) return false;
+      for (let i = 0; i < a.length; i++) if (a[i] !== u8[i]) return false;
+      return true;
+    }
+
+    async function subscribePush() {
+      if (!swReg || !('PushManager' in window) || !PUSH.enabled || !PUSH.key) return;
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const appKey = urlBase64ToUint8Array(PUSH.key);
+        let sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          // Re-subscribe if the server's VAPID key changed, otherwise pushes
+          // would silently never arrive.
+          const cur = sub.options && sub.options.applicationServerKey;
+          if (!cur || !sameKey(cur, appKey)) { try { await sub.unsubscribe(); } catch (_e) {} sub = null; }
+        }
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+        }
+        await fetch('/push/subscribe?secret=' + encodeURIComponent(secret), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sub),
+        });
+      } catch (_e) { /* push best-effort; in-app alerts still work */ }
+    }
+
+    function updateAlertsBtn() {
+      const granted = ('Notification' in window) && Notification.permission === 'granted';
+      alertsBtn.classList.toggle('on', granted);
+      alertsBtn.textContent = granted ? '🔔 On' : '🔔 Alerts';
+    }
+
+    async function enableAlerts() {
+      if (!('Notification' in window)) { flashToast('Notifications unsupported'); return; }
+      let perm = Notification.permission;
+      if (perm !== 'granted') { try { perm = await Notification.requestPermission(); } catch (_e) {} }
+      updateAlertsBtn();
+      if (perm !== 'granted') { flashToast('Allow notifications to get alerts'); return; }
+      flashToast('🔔 Alerts on');
+      await loadPushKey();
+      await subscribePush(); // best-effort: closed-app push if supported
+    }
+    alertsBtn.addEventListener('click', enableAlerts);
+
+    // ---- Picture-in-Picture -----------------------------------------------
+    function pipSupported() {
+      return ('pictureInPictureEnabled' in document && document.pictureInPictureEnabled) ||
+             (typeof remote.webkitSetPresentationMode === 'function');
+    }
+    async function togglePip() {
+      try {
+        if (document.pictureInPictureElement) { await document.exitPictureInPicture(); return; }
+        if (typeof remote.webkitSetPresentationMode === 'function') {
+          const mode = remote.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture';
+          remote.webkitSetPresentationMode(mode);
+          return;
+        }
+        if (remote.requestPictureInPicture) await remote.requestPictureInPicture();
+      } catch (_e) { flashToast('Picture-in-Picture unavailable'); }
+    }
+    pipBtn.addEventListener('click', togglePip);
+    if (pipSupported()) pipBtn.classList.remove('hidden');
+
     // ---- First-run secret prompt ------------------------------------------
     const setupOverlay = document.getElementById('setupOverlay');
     const secretInput = document.getElementById('secretInput');
@@ -426,6 +610,18 @@
       loadTrains();
       setInterval(loadTrains, 30000);
       setInterval(renderTrains, 5000);
+
+      // Notifications: register the service worker and, if the user already
+      // granted permission on a previous visit, silently refresh the push
+      // subscription (the server's key may have rotated). Otherwise the
+      // "🔔 Alerts" button arms them on demand (iOS needs that user gesture).
+      updateAlertsBtn();
+      registerServiceWorker().then(async () => {
+        if (('Notification' in window) && Notification.permission === 'granted') {
+          await loadPushKey();
+          await subscribePush();
+        }
+      });
     }
 
     function saveSecret() {
