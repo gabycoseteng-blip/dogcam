@@ -24,7 +24,11 @@
     }
     body { display: flex; flex-direction: column; }
     header {
-      padding: 14px 18px; display: flex; align-items: center; gap: 12px;
+      /* Respect the iPhone status bar / Dynamic Island: viewport-fit=cover lets
+         content draw under it, so pad by the safe-area insets or the header
+         buttons end up beneath the battery icon and become hard to tap. */
+      padding: calc(14px + env(safe-area-inset-top)) calc(18px + env(safe-area-inset-right)) 14px calc(18px + env(safe-area-inset-left));
+      display: flex; align-items: center; gap: 12px;
       border-bottom: 1px solid #1c1c1e; flex: 0 0 auto;
     }
     header h1 { font-size: 17px; font-weight: 600; margin: 0; }
@@ -38,7 +42,7 @@
     .hbtn:active { transform: scale(0.97); }
     .hbtn.on { background: #0a84ff; border-color: #0a84ff; color: #fff; }
     .toast {
-      position: absolute; top: 54px; left: 50%; transform: translateX(-50%);
+      position: absolute; top: calc(54px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
       background: rgba(255,159,10,0.96); color: #1a1a00; font-weight: 700;
       padding: 9px 16px; border-radius: 999px; font-size: 14px; z-index: 9;
       box-shadow: 0 6px 22px rgba(0,0,0,0.45); pointer-events: none;
