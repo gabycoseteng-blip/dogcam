@@ -157,11 +157,18 @@
       background: rgba(255,255,255,0.14); border-radius: 999px;
       padding: 3px 10px; font-size: 12px;
     }
+    .meta .controls { display: flex; gap: 10px; flex: 0 0 auto; }
     button.stop {
       appearance: none; border: none; border-radius: 12px;
       background: rgba(255,69,58,0.92); color: #fff; font-size: 14px; font-weight: 600;
       padding: 10px 18px; cursor: pointer; flex: 0 0 auto;
     }
+    button.flip {
+      appearance: none; border: none; border-radius: 12px;
+      background: rgba(255,255,255,0.18); color: #fff; font-size: 14px; font-weight: 600;
+      padding: 10px 18px; cursor: pointer; flex: 0 0 auto;
+    }
+    button.flip:active, button.stop:active { transform: scale(0.97); }
 
     /* ---- Scheduled tap-to-start prompt ------------------------------------ */
     .tap-prompt {
@@ -272,7 +279,10 @@
         <span id="statusText">Connecting…</span>
         <span class="viewers" id="viewers"></span>
       </div>
-      <button id="stopBtn" class="stop">Stop</button>
+      <div class="controls">
+        <button id="flipBtn" class="flip">Flip ⟳</button>
+        <button id="stopBtn" class="stop">Stop</button>
+      </div>
     </div>
 
     <!-- Shown when a scheduled start needs a tap (iOS gesture requirement). -->
@@ -364,6 +374,7 @@
     const startBtn = document.getElementById('startBtn');
     const startErr = document.getElementById('startErr');
     const stopBtn = document.getElementById('stopBtn');
+    const flipBtn = document.getElementById('flipBtn');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const meta = document.getElementById('meta');
@@ -511,13 +522,72 @@
       };
     }
 
+    // ---- Camera selection (front / back) ----------------------------------
+    // Defaults to the front ('user') camera so it points at the room/dog while
+    // the iPad sits face-up on a stand. The choice is remembered per-device.
+    const FACING_KEY = 'dogcam.facing.v1';
+    function readFacing() {
+      try {
+        return localStorage.getItem(FACING_KEY) === 'environment'
+          ? 'environment' : 'user';
+      } catch (_e) { return 'user'; }
+    }
+    let facing = readFacing();
+    function applyMirror() {
+      // Mirror the local preview for the front camera (conventional selfie
+      // view). This is preview-only and does not change what viewers receive.
+      preview.style.transform = facing === 'user' ? 'scaleX(-1)' : 'scaleX(1)';
+    }
+    function updateFlipLabel() {
+      flipBtn.textContent = facing === 'user' ? 'Use back ⟳' : 'Use front ⟳';
+    }
+    updateFlipLabel();
+
+    async function flipCamera() {
+      facing = facing === 'user' ? 'environment' : 'user';
+      try { localStorage.setItem(FACING_KEY, facing); } catch (_e) {}
+      updateFlipLabel();
+      if (!streaming) { applyMirror(); return; }
+      let newStream;
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facing } },
+          audio: false, // keep the existing microphone track
+        });
+      } catch (err) {
+        // Revert the remembered choice if the camera can't be opened.
+        facing = facing === 'user' ? 'environment' : 'user';
+        try { localStorage.setItem(FACING_KEY, facing); } catch (_e) {}
+        updateFlipLabel();
+        startErr.textContent = 'Could not switch camera: ' + err.message;
+        return;
+      }
+      const newTrack = newStream.getVideoTracks()[0];
+      // Hot-swap the outgoing video track on every viewer connection.
+      for (const id in peers) {
+        const pc = peers[id];
+        const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+        if (sender) { try { await sender.replaceTrack(newTrack); } catch (_e) {} }
+      }
+      // Swap the track into the shared local stream and stop the old one.
+      const oldTrack = localStream.getVideoTracks()[0];
+      if (oldTrack) {
+        localStream.removeTrack(oldTrack);
+        try { oldTrack.stop(); } catch (_e) {}
+      }
+      localStream.addTrack(newTrack);
+      preview.srcObject = localStream;
+      applyMirror();
+    }
+    flipBtn.addEventListener('click', flipCamera);
+
     // ---- Start / stop the camera ------------------------------------------
     async function startCamera(by) {
       if (streaming) return true;
       startErr.textContent = '';
       try {
         localStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
+          video: { facingMode: { ideal: facing } },
           audio: true,
         });
       } catch (err) {
@@ -538,6 +608,7 @@
       hideTapPrompt();
 
       preview.srcObject = localStream;
+      applyMirror();
       preview.classList.remove('hidden');
       dashboard.classList.add('hidden');
       meta.classList.remove('hidden');
