@@ -28,6 +28,12 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const GtfsRt = require('gtfs-realtime-bindings');
 
+// Web Push is optional: if the `web-push` module isn't installed the server
+// still runs, just without server-sent push notifications. Wrapping the require
+// keeps zero-config local use working even before `npm install`.
+let webpush = null;
+try { webpush = require('web-push'); } catch (_e) { webpush = null; }
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -92,6 +98,50 @@ function buildIceServers() {
 }
 
 const ICE_SERVERS = buildIceServers();
+
+// ---------------------------------------------------------------------------
+// Web Push notifications (camera on/off + bark alerts)
+// ---------------------------------------------------------------------------
+// Phones can subscribe to be notified — even when the viewer app is closed —
+// when the camera switches on/off or the iPad hears barking. This needs a
+// VAPID key pair. Supply VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY to keep the same
+// keys across restarts (so existing subscriptions survive); otherwise we
+// generate an ephemeral pair at boot and clients simply re-subscribe next time
+// they open the app. Push is fully optional and silently inert if `web-push`
+// isn't installed.
+let vapidPublicKey = null;
+if (webpush) {
+  let pub = process.env.VAPID_PUBLIC_KEY;
+  let priv = process.env.VAPID_PRIVATE_KEY;
+  if (!pub || !priv) {
+    const keys = webpush.generateVAPIDKeys();
+    pub = keys.publicKey;
+    priv = keys.privateKey;
+    console.warn('[push] No VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY set — generated ' +
+      'ephemeral keys. Push works, but subscriptions reset whenever the server ' +
+      'restarts. Set both env vars to make them durable.');
+  }
+  vapidPublicKey = pub;
+  webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:dogcam@example.invalid', pub, priv);
+}
+
+// Live push subscriptions, keyed by endpoint so re-subscribing is idempotent.
+// In-memory only: clients re-subscribe each time they open the app, so a
+// restart self-heals on the next viewer launch.
+const pushSubs = new Map();
+
+// Fan a notification out to every subscribed phone. Stale subscriptions (the
+// browser unsubscribed, or the push service 404/410s the endpoint) are pruned.
+function sendPush(payload) {
+  if (!webpush || !vapidPublicKey || pushSubs.size === 0) return;
+  const data = JSON.stringify(payload);
+  for (const [endpoint, sub] of pushSubs) {
+    webpush.sendNotification(sub, data).catch((err) => {
+      const code = err && err.statusCode;
+      if (code === 404 || code === 410) pushSubs.delete(endpoint);
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // MTA real-time train arrivals (Carroll St — F & G)
@@ -204,6 +254,9 @@ async function getTrainArrivals() {
 
 const app = express();
 
+// Parse small JSON bodies (used by the push-subscription endpoints below).
+app.use(express.json({ limit: '16kb' }));
+
 // Everything in /public is served statically. index.html (the phone viewer)
 // is served automatically at "/" while camera.html is reached at "/camera.html".
 app.use(express.static(path.join(__dirname, 'public')));
@@ -220,6 +273,37 @@ app.get('/ice-config', (req, res) => {
     return res.status(401).json({ error: 'unauthorized' });
   }
   res.json({ iceServers: ICE_SERVERS });
+});
+
+// --- Web Push subscription management (all require the shared secret) -------
+// The client fetches the VAPID public key, subscribes through the browser, then
+// POSTs the resulting subscription here so the server can push to it later.
+app.get('/push/key', (req, res) => {
+  if (!isValidSecret(req.query.secret)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  res.json({ enabled: !!vapidPublicKey, key: vapidPublicKey });
+});
+
+app.post('/push/subscribe', (req, res) => {
+  if (!isValidSecret(req.query.secret)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  const sub = req.body;
+  if (!sub || typeof sub.endpoint !== 'string') {
+    return res.status(400).json({ error: 'invalid_subscription' });
+  }
+  pushSubs.set(sub.endpoint, sub);
+  res.json({ ok: true });
+});
+
+app.post('/push/unsubscribe', (req, res) => {
+  if (!isValidSecret(req.query.secret)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  const endpoint = req.body && req.body.endpoint;
+  if (endpoint) pushSubs.delete(endpoint);
+  res.json({ ok: true });
 });
 
 // Live train arrivals for the iPad dashboard / phone viewers. Same shared
@@ -260,6 +344,22 @@ const wss = new WebSocketServer({ noServer: true });
 // role is informational ('camera' | 'viewer' | 'unknown'); routing is driven
 // purely by explicit targetId values, not by role, keeping the relay simple.
 const clients = new Map();
+
+// The set of client ids that currently report a live camera (via `cam-state`).
+// Used to detect on/off transitions for push notifications and to fire an
+// "offline" push if a live camera's socket dies. Normally holds zero or one id.
+const liveCameras = new Set();
+
+// Push helper for the camera on/off transitions, so the message text lives in
+// one place. `on` true => the camera just came online; false => it went off.
+function notifyCameraState(on) {
+  sendPush({
+    title: '🐶 Dog Cam',
+    body: on ? 'Camera is now ON' : 'Camera turned OFF',
+    tag: 'cam-state',
+    url: '/',
+  });
+}
 
 /**
  * Constant-time comparison of the provided token against the expected secret.
@@ -319,6 +419,12 @@ wss.on('connection', (ws) => {
   const id = crypto.randomUUID();
   clients.set(id, { ws, role: 'unknown' });
 
+  // Liveness flag for the ping/pong heartbeat below: a pong (or any pong-like
+  // activity) marks the socket alive; the sweep terminates anything that didn't
+  // answer the previous ping, catching half-dead sockets TCP hasn't noticed.
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   // Tell the freshly-connected client its own id so it can stamp messages.
   ws.send(JSON.stringify({ type: 'welcome', id }));
 
@@ -365,6 +471,45 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      // The iPad reports its camera turning on/off (decoupled from the WebRTC
+      // `camera-ready` reattach signal). We track live cameras to push an
+      // on/off notification on the first-on / last-off transition, and relay
+      // the state to viewers so an open app updates instantly.
+      case 'cam-state': {
+        const me = clients.get(id);
+        if (me) me.role = 'camera';
+        const on = !!msg.on;
+        const wasEmpty = liveCameras.size === 0;
+        if (on) liveCameras.add(id); else liveCameras.delete(id);
+
+        for (const [otherId, other] of clients) {
+          if (otherId === id) continue;
+          if (other.ws.readyState === other.ws.OPEN) {
+            other.ws.send(JSON.stringify({ type: 'cam-state', on, from: id }));
+          }
+        }
+
+        if (on && wasEmpty) notifyCameraState(true);
+        else if (!on && !wasEmpty && liveCameras.size === 0) notifyCameraState(false);
+        break;
+      }
+
+      // The iPad detected something worth flagging (e.g. barking). Relay it to
+      // viewers for an in-app alert and push it to subscribed phones.
+      case 'alert': {
+        const kind = typeof msg.kind === 'string' ? msg.kind : 'alert';
+        for (const [otherId, other] of clients) {
+          if (otherId === id) continue;
+          if (other.ws.readyState === other.ws.OPEN) {
+            other.ws.send(JSON.stringify({ type: 'alert', kind, from: id }));
+          }
+        }
+        if (kind === 'bark') {
+          sendPush({ title: '🐶 Dog Cam', body: 'Barking detected', tag: 'bark', url: '/' });
+        }
+        break;
+      }
+
       // Core mesh routing: SDP offers, SDP answers and ICE candidates are
       // relayed verbatim to the single addressed peer. The server adds a
       // trustworthy `from` field (our assigned id) so a peer can never spoof
@@ -398,6 +543,11 @@ wss.on('connection', (ws) => {
   // iPad when a phone walks out of range or closes its tab.
   ws.on('close', () => {
     clients.delete(id);
+    // If a live camera's socket died, treat it as the camera going offline:
+    // tell viewers and, if it was the last one, push an "offline" alert.
+    if (liveCameras.delete(id) && liveCameras.size === 0) {
+      notifyCameraState(false);
+    }
     for (const [, other] of clients) {
       if (other.ws.readyState === other.ws.OPEN) {
         other.ws.send(JSON.stringify({ type: 'peer-left', from: id }));
@@ -411,6 +561,24 @@ wss.on('connection', (ws) => {
     try { ws.close(); } catch (_err) { /* already closing */ }
   });
 });
+
+// --- Heartbeat -------------------------------------------------------------
+// Ping every socket on an interval and terminate any that didn't pong since the
+// last sweep. This reclaims dead connections (e.g. an iPad that dropped off
+// wifi without a clean close) so their `close` handler runs — freeing the slot
+// and notifying viewers that the camera went offline.
+const HEARTBEAT_MS = 30000;
+const heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      try { ws.terminate(); } catch (_e) {}
+      continue;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch (_e) {}
+  }
+}, HEARTBEAT_MS);
+wss.on('close', () => clearInterval(heartbeat));
 
 server.listen(PORT, HOST, () => {
   const scheme = (TLS_CERT_FILE && TLS_KEY_FILE) ? 'https' : 'http';

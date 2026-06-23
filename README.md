@@ -27,6 +27,42 @@ the time windows you choose.
     screen shows a one-tap "Start scheduled session" prompt instead of failing.
   - Manually tapping **Stop** during a window keeps it off until the window ends.
 
+## Alerts & notifications
+
+- **Bark alerts:** while the camera is live the iPad listens to its own mic with
+  a Web Audio analyser. Sustained loudness above a threshold fires a single
+  (rate-limited) alert that flashes on the iPad and is sent to the phones.
+  Toggle it under ⚙ ("Bark alerts"); it's on by default and never keeps the mic
+  open on the idle dashboard.
+- **Camera on/off + bark push:** phones can tap **🔔 Alerts** in the viewer to
+  be notified when the camera turns on or off, or hears barking — **even when
+  the viewer app is closed**, via Web Push. This needs the viewer added to the
+  Home Screen (iOS 16.4+ only delivers push to installed PWAs) and a one-time
+  notification-permission tap. While the app is open you get the alert
+  regardless of push support. Push is optional and degrades gracefully: with no
+  `VAPID_*` keys set the server generates a pair at boot (works, but phones
+  re-subscribe after a restart); set `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` for
+  durable subscriptions (`npx web-push generate-vapid-keys`).
+- **Picture-in-Picture:** the viewer has a **⧉ PiP** button (where the browser
+  supports it, including iOS Safari) so you can keep watching in a floating
+  window while using other apps.
+- **Torch:** when streaming from the **back** camera on a device that exposes
+  the torch (Android Chrome; not iOS Safari), a **Torch** button appears in the
+  live overlay for low-light watching.
+
+## Reliability
+
+- **Auto-reconnect:** both pages reconnect the signaling socket with exponential
+  backoff, and the server runs a 30s ping/pong heartbeat that reclaims dead
+  sockets (e.g. an iPad that dropped off wifi) so viewers are told the camera
+  went offline.
+- **Self-healing video:** if a peer connection wedges, the camera rebuilds it
+  from a fresh offer and the viewer re-announces — recovering a stalled stream
+  without a page reload.
+- **Cool & cellular-friendly:** the camera captures at 720p/24fps and caps each
+  viewer's video at ~1.2 Mbps, keeping the always-plugged-in iPad cooler and the
+  uplink modest.
+
 ## Train arrivals
 
 Both the iPad dashboard and the phone viewer show the next F and G trains at
@@ -131,6 +167,9 @@ See **[SETUP.md](./SETUP.md)** for two click-by-click guides:
 | `TRAIN_STOP_ID` | `F21` | GTFS stop-id prefix to report arrivals for (`F21` = Carroll St; `F21N`/`F21S` are its two directions). |
 | `TRAIN_ROUTES` | `F,G` | Comma-separated GTFS route ids to include. |
 | `TRAIN_FEEDS` | BDFM + G feeds | Comma-separated GTFS-realtime feed URLs to poll. Defaults to the MTA BDFM and G feeds. |
+| `VAPID_PUBLIC_KEY` | — | Web Push VAPID public key. Set with the private key to keep push subscriptions durable across restarts. Generate with `npx web-push generate-vapid-keys`. If unset, an ephemeral pair is generated at boot. |
+| `VAPID_PRIVATE_KEY` | — | Web Push VAPID private key (pairs with the public key above). |
+| `VAPID_SUBJECT` | `mailto:dogcam@example.invalid` | `mailto:` or URL identifying the push sender (required by the Web Push spec). |
 
 The clients fetch their ICE/TURN list from the authenticated `/ice-config`
 endpoint at startup, so STUN/TURN setup lives only in the server's environment.

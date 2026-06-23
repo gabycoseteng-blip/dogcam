@@ -32,3 +32,13 @@ services:
         sync: false
       - key: TURN_CREDENTIAL
         sync: false
+      # Web Push notifications (camera on/off + bark alerts) work out of the box
+      # with keys generated at boot, but those reset on every restart/redeploy —
+      # so existing phone subscriptions stop receiving pushes until the viewer
+      # app is reopened. To make them durable, generate a VAPID key pair once
+      # (`npx web-push generate-vapid-keys`) and paste the values here. Leave
+      # blank to use ephemeral keys.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false

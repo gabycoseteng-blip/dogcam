@@ -170,6 +170,14 @@
     }
     button.flip:active, button.stop:active { transform: scale(0.97); }
 
+    /* Bark-alert toast (brief flash on the iPad when barking is detected). */
+    .bark-toast {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      background: rgba(255,159,10,0.96); color: #1a1a00; font-weight: 700;
+      padding: 10px 18px; border-radius: 999px; font-size: 15px; z-index: 8;
+      box-shadow: 0 6px 22px rgba(0,0,0,0.45); pointer-events: none;
+    }
+
     /* ---- Scheduled tap-to-start prompt ------------------------------------ */
     .tap-prompt {
       position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -280,10 +288,14 @@
         <span class="viewers" id="viewers"></span>
       </div>
       <div class="controls">
+        <button id="torchBtn" class="flip hidden">Torch ○</button>
         <button id="flipBtn" class="flip">Flip ⟳</button>
         <button id="stopBtn" class="stop">Stop</button>
       </div>
     </div>
+
+    <!-- Brief flash when the iPad hears barking. -->
+    <div id="barkToast" class="bark-toast hidden">🔔 Barking detected</div>
 
     <!-- Shown when a scheduled start needs a tap (iOS gesture requirement). -->
     <div id="tapPrompt" class="tap-prompt hidden">
@@ -304,6 +316,11 @@
       <label class="switch row">
         <input type="checkbox" id="schedEnabled" />
         <span>Enable schedule</span>
+      </label>
+
+      <label class="switch row">
+        <input type="checkbox" id="barkEnabled" />
+        <span>Bark alerts — notify phones when the camera hears barking</span>
       </label>
 
       <div id="windowList"></div>
@@ -344,6 +361,27 @@
     // At most two phones at once.
     const MAX_VIEWERS = 2;
 
+    // Capture/encode caps so the always-plugged-in iPad runs cool and the
+    // uplink stays modest on cellular. 720p24 at ~1.2 Mbps is ample for a dog
+    // cam; the bitrate cap is applied per-sender once tracks are attached.
+    const CAPTURE = {
+      width: { ideal: 1280 }, height: { ideal: 720 },
+      frameRate: { ideal: 24, max: 30 },
+    };
+    const MAX_VIDEO_BITRATE = 1200000; // ~1.2 Mbps
+    function videoConstraints() {
+      return Object.assign({ facingMode: { ideal: facing } }, CAPTURE);
+    }
+    async function capSenderBitrate(sender) {
+      try {
+        const params = sender.getParameters();
+        if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+        params.encodings[0].maxBitrate = MAX_VIDEO_BITRATE;
+        params.encodings[0].maxFramerate = 24;
+        await sender.setParameters(params);
+      } catch (_e) { /* not all browsers allow setParameters; ignore */ }
+    }
+
     async function loadIceConfig() {
       try {
         const res = await fetch('/ice-config?secret=' + encodeURIComponent(secret));
@@ -367,6 +405,8 @@
     const peers = Object.create(null);             // phoneId -> RTCPeerConnection
     const pendingCandidates = Object.create(null); // phoneId -> [candidate]
     const waitingViewers = new Set();              // phones that announced while idle
+    const peerRetries = Object.create(null);       // phoneId -> recovery attempts
+    const recoverTimers = Object.create(null);     // phoneId -> pending rebuild timer
 
     // ---- DOM --------------------------------------------------------------
     const preview = document.getElementById('preview');
@@ -375,6 +415,8 @@
     const startErr = document.getElementById('startErr');
     const stopBtn = document.getElementById('stopBtn');
     const flipBtn = document.getElementById('flipBtn');
+    const torchBtn = document.getElementById('torchBtn');
+    const barkToast = document.getElementById('barkToast');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const meta = document.getElementById('meta');
@@ -411,7 +453,9 @@
     // ---- Per-viewer peer connection ---------------------------------------
     async function createPeerForViewer(phoneId) {
       if (!streaming || !localStream) { waitingViewers.add(phoneId); return; }
-      if (peers[phoneId]) return;
+      // If a connection already exists (a re-announce, or a recovery rebuild),
+      // tear it down and start fresh so we always offer a clean path.
+      if (peers[phoneId]) closePeer(phoneId);
       if (Object.keys(peers).length >= MAX_VIEWERS) {
         console.warn('Viewer limit reached; ignoring', phoneId);
         return;
@@ -421,7 +465,10 @@
       peers[phoneId] = pc;
       pendingCandidates[phoneId] = [];
 
-      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+      localStream.getTracks().forEach((track) => {
+        const sender = pc.addTrack(track, localStream);
+        if (track.kind === 'video') capSenderBitrate(sender);
+      });
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -429,7 +476,14 @@
         }
       };
       pc.onconnectionstatechange = () => {
-        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+        const st = pc.connectionState;
+        if (st === 'connected') {
+          peerRetries[phoneId] = 0; // healthy again — reset the recovery counter
+        } else if (st === 'failed') {
+          scheduleRecover(phoneId, 600);   // rebuild promptly on a hard failure
+        } else if (st === 'disconnected') {
+          scheduleRecover(phoneId, 4000);  // give a transient blip time to heal
+        } else if (st === 'closed') {
           closePeer(phoneId);
         }
       };
@@ -440,6 +494,22 @@
       renderViewers();
     }
 
+    // Rebuild a wedged viewer connection from scratch (which triggers a fresh
+    // offer/answer + ICE gather on both ends), capped so a viewer that has
+    // truly gone doesn't loop forever.
+    function scheduleRecover(phoneId, delay) {
+      if (recoverTimers[phoneId]) return; // one pending rebuild at a time
+      recoverTimers[phoneId] = setTimeout(() => {
+        delete recoverTimers[phoneId];
+        const pc = peers[phoneId];
+        if (!pc || !streaming) return;
+        if (pc.connectionState === 'connected') return; // recovered on its own
+        const n = (peerRetries[phoneId] = (peerRetries[phoneId] || 0) + 1);
+        if (n > 6) { closePeer(phoneId); return; }
+        createPeerForViewer(phoneId); // closes the old pc and re-offers
+      }, delay);
+    }
+
     function closePeer(phoneId) {
       const pc = peers[phoneId];
       if (pc) {
@@ -447,6 +517,12 @@
         try { pc.close(); } catch (_e) {}
         delete peers[phoneId];
       }
+      if (recoverTimers[phoneId]) {
+        clearTimeout(recoverTimers[phoneId]);
+        delete recoverTimers[phoneId];
+      }
+      // Note: peerRetries is intentionally NOT cleared here so the rebuild cap
+      // survives a recovery cycle; it's cleared on a genuine peer-left.
       delete pendingCandidates[phoneId];
       renderViewers();
     }
@@ -458,21 +534,25 @@
     // ---- WebSocket wiring --------------------------------------------------
     // The camera keeps the signaling socket open even while idle, so it is
     // discoverable and can come online instantly when the schedule fires.
+    let wsBackoff = 1000; // grows on repeated failures, resets on a clean open
     function connectSocket() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}/?secret=${encodeURIComponent(secret)}`);
 
       ws.onopen = () => {
+        wsBackoff = 1000;
         if (streaming) {
           setStatus('Live — waiting for phones', true);
-          signal({ type: 'camera-ready' }); // re-announce so viewers reattach
+          signal({ type: 'camera-ready' });        // re-announce so viewers reattach
+          signal({ type: 'cam-state', on: true }); // re-register as live after a blip
         }
       };
       ws.onclose = (event) => {
         if (streaming) {
           setStatus(`Disconnected (code ${event.code}${event.reason ? ': ' + event.reason : ''})`, false);
         }
-        setTimeout(connectSocket, 2000);
+        setTimeout(connectSocket, wsBackoff);
+        wsBackoff = Math.min(wsBackoff * 2, 15000); // exponential backoff, capped
       };
       ws.onerror = () => { if (streaming) setStatus('Connection error', false); };
 
@@ -516,6 +596,7 @@
 
           case 'peer-left':
             waitingViewers.delete(msg.from);
+            delete peerRetries[msg.from]; // genuine departure — drop its history
             if (peers[msg.from]) closePeer(msg.from);
             break;
         }
@@ -551,7 +632,7 @@
       let newStream;
       try {
         newStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facing } },
+          video: videoConstraints(),
           audio: false, // keep the existing microphone track
         });
       } catch (err) {
@@ -578,8 +659,105 @@
       localStream.addTrack(newTrack);
       preview.srcObject = localStream;
       applyMirror();
+      updateTorchButton(); // torch availability depends on which camera is active
     }
     flipBtn.addEventListener('click', flipCamera);
+
+    // ---- Torch / flashlight (back camera only, where supported) -----------
+    // iOS Safari doesn't expose the torch constraint, so the button stays
+    // hidden there; on Android Chrome the back camera typically supports it.
+    let torchOn = false;
+    function updateTorchButton() {
+      let supported = false;
+      try {
+        const track = localStream && localStream.getVideoTracks()[0];
+        supported = !!(track && track.getCapabilities && track.getCapabilities().torch);
+      } catch (_e) { supported = false; }
+      torchBtn.classList.toggle('hidden', !supported);
+      if (!supported) torchOn = false;
+      torchBtn.textContent = torchOn ? 'Torch ◉' : 'Torch ○';
+    }
+    async function toggleTorch() {
+      const track = localStream && localStream.getVideoTracks()[0];
+      if (!track) return;
+      torchOn = !torchOn;
+      try {
+        await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+      } catch (_e) { torchOn = !torchOn; } // revert on failure
+      updateTorchButton();
+    }
+    torchBtn.addEventListener('click', toggleTorch);
+
+    // ---- Bark detection ---------------------------------------------------
+    // While the camera is live we watch the mic's loudness with a Web Audio
+    // analyser. Sustained loudness above a threshold fires one alert (rate-
+    // limited) which the server relays to phones and turns into a push. This
+    // only runs while streaming — we never keep the mic open on the idle
+    // dashboard.
+    const BARK_KEY = 'dogcam.barkalerts.v1';
+    function readBarkEnabled() {
+      try { return localStorage.getItem(BARK_KEY) !== '0'; } catch (_e) { return true; }
+    }
+    let barkAlertsEnabled = readBarkEnabled(); // default ON
+    const BARK_THRESHOLD = 0.14;     // RMS (0..1) that counts as "loud"
+    const BARK_SUSTAIN = 4;          // consecutive loud frames required
+    const BARK_COOLDOWN_MS = 20000;  // min gap between alerts
+    let audioCtx = null, analyser = null, barkRAF = null, lastBarkAt = 0;
+
+    function startBarkDetection() {
+      stopBarkDetection();
+      if (!barkAlertsEnabled || !localStream) return;
+      if (!localStream.getAudioTracks().length) return;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      try {
+        audioCtx = new AC();
+        if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+        const src = audioCtx.createMediaStreamSource(localStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        src.connect(analyser);
+        const buf = new Uint8Array(analyser.fftSize);
+        let loud = 0;
+        const tick = () => {
+          if (!analyser) return;
+          analyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const v = (buf[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / buf.length);
+          if (rms > BARK_THRESHOLD) {
+            if (++loud >= BARK_SUSTAIN) { loud = 0; maybeBark(); }
+          } else {
+            loud = Math.max(0, loud - 1);
+          }
+          barkRAF = requestAnimationFrame(tick);
+        };
+        barkRAF = requestAnimationFrame(tick);
+      } catch (_e) { stopBarkDetection(); }
+    }
+
+    function maybeBark() {
+      const now = Date.now();
+      if (now - lastBarkAt < BARK_COOLDOWN_MS) return;
+      lastBarkAt = now;
+      signal({ type: 'alert', kind: 'bark' });
+      flashBark();
+    }
+
+    function flashBark() {
+      barkToast.classList.remove('hidden');
+      clearTimeout(flashBark._t);
+      flashBark._t = setTimeout(() => barkToast.classList.add('hidden'), 3500);
+    }
+
+    function stopBarkDetection() {
+      if (barkRAF) { cancelAnimationFrame(barkRAF); barkRAF = null; }
+      analyser = null;
+      if (audioCtx) { try { audioCtx.close(); } catch (_e) {} audioCtx = null; }
+    }
 
     // ---- Start / stop the camera ------------------------------------------
     async function startCamera(by) {
@@ -587,7 +765,7 @@
       startErr.textContent = '';
       try {
         localStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facing } },
+          video: videoConstraints(),
           audio: true,
         });
       } catch (err) {
@@ -617,10 +795,14 @@
       setStatus('Live — waiting for phones', true);
       renderViewers();
       requestWakeLock();
+      updateTorchButton();
+      startBarkDetection();
 
       if (!ws || ws.readyState === WebSocket.CLOSED) connectSocket();
-      // Tell everyone the camera is live so viewers (re)announce themselves.
+      // Tell everyone the camera is live so viewers (re)announce themselves,
+      // and signal cam-state so the server can push an "on" notification.
       signal({ type: 'camera-ready' });
+      signal({ type: 'cam-state', on: true });
       // Connect any phones that announced while we were idle.
       for (const id of waitingViewers) createPeerForViewer(id);
       waitingViewers.clear();
@@ -630,12 +812,18 @@
     function stopCamera() {
       streaming = false;
       startedBy = null;
+      // Tell the server the camera is off (drives the "off" push) before we
+      // tear anything down; the signaling socket stays open for the schedule.
+      signal({ type: 'cam-state', on: false });
+      stopBarkDetection();
       closeAllPeers();
       waitingViewers.clear();
       if (localStream) {
         localStream.getTracks().forEach((t) => { try { t.stop(); } catch (_e) {} });
         localStream = null;
       }
+      torchOn = false;
+      torchBtn.classList.add('hidden');
       preview.srcObject = null;
       preview.classList.add('hidden');
       meta.classList.add('hidden');
@@ -875,7 +1063,17 @@
     // ---- Settings UI ------------------------------------------------------
     const settings = document.getElementById('settings');
     const schedEnabled = document.getElementById('schedEnabled');
+    const barkEnabled = document.getElementById('barkEnabled');
     const windowList = document.getElementById('windowList');
+
+    barkEnabled.addEventListener('change', () => {
+      barkAlertsEnabled = barkEnabled.checked;
+      try { localStorage.setItem(BARK_KEY, barkAlertsEnabled ? '1' : '0'); } catch (_e) {}
+      // Apply immediately if the camera is already live.
+      if (streaming) {
+        if (barkAlertsEnabled) startBarkDetection(); else stopBarkDetection();
+      }
+    });
 
     document.getElementById('gearBtn').addEventListener('click', openSettings);
     document.getElementById('doneBtn').addEventListener('click', closeSettings);
@@ -890,6 +1088,7 @@
 
     function openSettings() {
       schedEnabled.checked = schedule.enabled;
+      barkEnabled.checked = barkAlertsEnabled;
       renderWindows();
       settings.classList.remove('hidden');
     }
