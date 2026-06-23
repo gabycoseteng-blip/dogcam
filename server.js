@@ -313,6 +313,15 @@ async function getTrainArrivals() {
 
 const app = express();
 
+// Build marker so it's obvious at a glance whether the deployed/running code is
+// the latest. Render exposes the deployed commit as RENDER_GIT_COMMIT; we fall
+// back to an APP_VERSION override or 'dev' for local runs. `started` records
+// when this process booted, which doubles as a "last redeploy/restart" signal.
+const BUILD_VERSION =
+  (process.env.RENDER_GIT_COMMIT && process.env.RENDER_GIT_COMMIT.slice(0, 7)) ||
+  process.env.APP_VERSION || 'dev';
+const BUILD_STARTED = new Date().toISOString();
+
 // Parse small JSON bodies (used by the push-subscription endpoints below).
 app.use(express.json({ limit: '16kb' }));
 
@@ -321,7 +330,14 @@ app.use(express.json({ limit: '16kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // A tiny health endpoint that is handy for uptime checks / load balancers.
-app.get('/healthz', (_req, res) => res.json({ ok: true, clients: clients.size }));
+app.get('/healthz', (_req, res) =>
+  res.json({ ok: true, clients: clients.size, version: BUILD_VERSION, started: BUILD_STARTED }));
+
+// Public build marker the clients poll to display which build is live. No
+// secret required — it's just a commit id + boot time, nothing sensitive.
+app.get('/version', (_req, res) =>
+  res.json({ version: BUILD_VERSION, started: BUILD_STARTED }));
+
 
 // The clients fetch their ICE/TURN configuration from here at startup so the
 // STUN/TURN setup lives in one place (the server env) instead of being
@@ -651,6 +667,7 @@ wss.on('close', () => clearInterval(heartbeat));
 server.listen(PORT, HOST, () => {
   const scheme = (TLS_CERT_FILE && TLS_KEY_FILE) ? 'https' : 'http';
   console.log(`Dog monitor signaling server listening on ${HOST}:${PORT} (${scheme})`);
+  console.log(`  Build         : ${BUILD_VERSION} (started ${BUILD_STARTED})`);
   console.log(`  Phone viewers : ${scheme}://localhost:${PORT}/?secret=${STREAM_SECRET}`);
   console.log(`  iPad camera   : ${scheme}://localhost:${PORT}/camera.html?secret=${STREAM_SECRET}`);
   if (CF_TURN_ENABLED) {

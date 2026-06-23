@@ -28,6 +28,7 @@
       border-bottom: 1px solid #1c1c1e; flex: 0 0 auto;
     }
     header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+    .build { font-size: 10px; color: #4a4a4e; font-variant-numeric: tabular-nums; }
     header .spacer { flex: 1; }
     .hbtn {
       appearance: none; border: 1px solid #2c2c2e; border-radius: 999px;
@@ -122,6 +123,7 @@
   <header>
     <span id="statusDot" class="dot"></span>
     <h1>Dog Cam · Live</h1>
+    <span id="buildTag" class="build"></span>
     <span class="spacer"></span>
     <button id="pipBtn" class="hbtn hidden" title="Picture in picture">⧉ PiP</button>
     <button id="alertsBtn" class="hbtn" title="Notify me when the camera turns on/off or hears barking">🔔 Alerts</button>
@@ -237,6 +239,18 @@
 
     function signal(obj) {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    }
+
+    // Show which server build is live, so it's obvious whether a redeploy has
+    // landed (and whether this device is on a stale cached copy).
+    const buildTag = document.getElementById('buildTag');
+    async function loadVersion() {
+      try {
+        const res = await fetch('/version', { cache: 'no-store' });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (d && d.version) buildTag.textContent = 'build ' + d.version;
+      } catch (_e) { /* leave it blank */ }
     }
 
     // Debounced re-announce: if our peer connection is wedged, prod the camera
@@ -610,6 +624,9 @@
       loadTrains();
       setInterval(loadTrains, 30000);
       setInterval(renderTrains, 5000);
+
+      loadVersion();
+      setInterval(loadVersion, 120000);
 
       // Notifications: register the service worker and, if the user already
       // granted permission on a previous visit, silently refresh the push
