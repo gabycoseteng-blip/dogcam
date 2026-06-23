@@ -173,6 +173,13 @@ See **[SETUP.md](./SETUP.md)** for two click-by-click guides:
 | `VAPID_PUBLIC_KEY` | — | Web Push VAPID public key. Set with the private key to keep push subscriptions durable across restarts. Generate with `npx web-push generate-vapid-keys`. If unset, an ephemeral pair is generated at boot. |
 | `VAPID_PRIVATE_KEY` | — | Web Push VAPID private key (pairs with the public key above). |
 | `VAPID_SUBJECT` | `mailto:dogcam@example.invalid` | `mailto:` or URL identifying the push sender (required by the Web Push spec). |
+| `APP_VERSION` | `RENDER_GIT_COMMIT` or `dev` | Build label shown in both app headers and at `/version` & `/healthz`. On Render it auto-uses the deployed commit SHA; set this to override. |
+
+> **Which build is live?** Both pages show a small `build <id>` tag in the
+> header, and the server exposes it at **`/version`** (and `/healthz`). If the
+> tag/endpoint doesn't match your latest commit after a deploy, Render hasn't
+> redeployed yet — or the device is showing a cached copy (fully close the app
+> and reopen, or remove and re-add the Home Screen icon).
 
 The clients fetch their ICE/TURN list from the authenticated `/ice-config`
 endpoint at startup, so STUN/TURN setup lives only in the server's environment.

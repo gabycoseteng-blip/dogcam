@@ -37,6 +37,7 @@
     header h1 { font-size: 17px; font-weight: 600; margin: 0; }
     header .spacer { flex: 1; }
     #clock { font-variant-numeric: tabular-nums; font-size: 15px; color: #c9c9cb; }
+    .build { font-size: 10px; color: #4a4a4e; font-variant-numeric: tabular-nums; }
     .gear {
       appearance: none; border: none; background: transparent; color: #c9c9cb;
       font-size: 20px; cursor: pointer; padding: 4px 8px; border-radius: 8px;
@@ -238,6 +239,7 @@
   <header>
     <span id="statusDot" class="dot"></span>
     <h1>Dog Cam</h1>
+    <span id="buildTag" class="build"></span>
     <span class="spacer"></span>
     <span id="clock"></span>
     <button id="gearBtn" class="gear" title="Schedule">⚙</button>
@@ -1194,8 +1196,22 @@
       setInterval(scheduleTick, 10000); // schedule control loop
 
       requestWakeLock();
+      loadVersion();
       loadIceConfig().then(connectSocket);
     }
+
+    // Show which server build is live, so it's obvious whether a redeploy has
+    // landed. Polled occasionally in case the server restarts under us.
+    const buildTag = document.getElementById('buildTag');
+    async function loadVersion() {
+      try {
+        const res = await fetch('/version', { cache: 'no-store' });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (d && d.version) buildTag.textContent = 'build ' + d.version;
+      } catch (_e) { /* leave it blank */ }
+    }
+    setInterval(loadVersion, 120000);
 
     if (!secret) {
       // First run on this device with no saved code: ask for it once. The
