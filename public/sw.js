@@ -1,40 +1,30 @@
-/* Dog Cam — service worker.
- *
- * Its only job is Web Push: show a notification when the server pushes one
- * (camera on/off, barking) — including while the viewer app is closed — and
- * focus/open the app when the notification is tapped. There is intentionally
- * no fetch/caching handler: the app is always served live from the server.
- */
-'use strict';
-
+// Service worker for Dog Cam PWA — handles background notifications only.
+// No caching layer: the app is always online (WebRTC requires connectivity).
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
-self.addEventListener('push', (event) => {
-  let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch (_e) { data = {}; }
-  const title = data.title || '🐶 Dog Cam';
-  const options = {
-    body: data.body || '',
-    tag: data.tag || 'dogcam',
-    renotify: true,
-    icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
-    data: { url: data.url || '/' },
-  };
-  event.waitUntil(self.registration.showNotification(title, options));
+self.addEventListener('message', (event) => {
+  const { type, title, body, tag } = event.data || {};
+  if (type !== 'notify') return;
+
+  event.waitUntil(
+    self.registration.showNotification(title || 'Dog Cam', {
+      body: body || '',
+      tag: tag || 'dogcam',
+      renotify: true,
+      requireInteraction: false,
+    })
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-      for (const client of list) {
-        if ('focus' in client) return client.focus();
+    self.clients.matchAll({ type: 'window' }).then((clients) => {
+      for (const client of clients) {
+        if (client.url && 'focus' in client) return client.focus();
       }
-      if (self.clients.openWindow) return self.clients.openWindow(url);
-      return undefined;
-    }),
+      if (self.clients.openWindow) return self.clients.openWindow('/');
+    })
   );
 });
