@@ -416,6 +416,15 @@
             await handleOffer(msg.from, msg.sdp);
             break;
 
+          // The camera came online (or restarted) after we were already
+          // connected to the server. Re-announce so it opens a fresh
+          // connection and sends us an offer — otherwise we'd wait forever.
+          case 'camera-ready':
+            setStatus('Camera online — connecting…', false);
+            waitText.textContent = 'Camera found. Connecting…';
+            signal({ type: 'viewer-joined' });
+            break;
+
           case 'ice-candidate':
             if (!msg.candidate) return;
             if (pc && pc.remoteDescription && pc.remoteDescription.type) {
