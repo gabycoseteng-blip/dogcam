@@ -332,8 +332,28 @@ app.use(express.json({ limit: '16kb' }));
 // /manifest.webmanifest?secret=... and we echo that secret into start_url so
 // the home-screen icon always opens "/?secret=...". Defined BEFORE the static
 // middleware so it wins over any file on disk.
+// Pull the secret out of the Cookie header (iOS fetches the manifest in
+// Safari's context, so a cookie set when the page opened is available here
+// even if the query string didn't survive the manifest fetch).
+function secretFromCookie(req) {
+  const raw = req.headers.cookie;
+  if (!raw) return '';
+  for (const part of raw.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === 'dogcam_secret') {
+      try { return decodeURIComponent(part.slice(eq + 1).trim()); } catch (_e) { return ''; }
+    }
+  }
+  return '';
+}
+
 function sendManifest(req, res) {
-  const secret = typeof req.query.secret === 'string' ? req.query.secret : '';
+  // Query param wins; fall back to the cookie so start_url still carries the
+  // secret even when iOS fetches the bare manifest href without the query.
+  const secret = (typeof req.query.secret === 'string' && req.query.secret)
+    ? req.query.secret
+    : secretFromCookie(req);
   const start = secret ? '/?secret=' + encodeURIComponent(secret) : '/';
   res.type('application/manifest+json').json({
     name: 'Dog Cam',
