@@ -122,7 +122,11 @@
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     };
     const params = new URLSearchParams(location.search);
-    const secret = params.get('secret') || '';
+    // Persist the secret in localStorage so home-screen PWA launches work
+    // without a ?secret= in the URL (manifest start_url is always bare "/").
+    const urlSecret = params.get('secret');
+    if (urlSecret) localStorage.setItem('dogcam_secret', urlSecret);
+    const secret = urlSecret || localStorage.getItem('dogcam_secret') || '';
 
     async function loadIceConfig() {
       try {
@@ -433,7 +437,7 @@
     if (!secret) {
       waitOverlay.classList.remove('hidden');
       waitText.textContent = '';
-      errText.textContent = 'Missing ?secret= token in the URL.';
+      errText.textContent = 'Open the link with ?secret= once to save it, then the app will work from your home screen.';
     } else {
       setupPip();
       setupServiceWorker().then(() => {
