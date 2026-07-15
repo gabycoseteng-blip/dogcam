@@ -17,6 +17,22 @@ self.addEventListener('message', (event) => {
   );
 });
 
+// Web Push from the server (camera on/off, bark) — delivered even when the
+// app is closed. Payload is JSON: { title, body, tag, url }.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (_e) {}
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Dog Cam', {
+      body: data.body || '',
+      tag: data.tag || 'dogcam',
+      data: { url: data.url || '/' },
+      renotify: true,
+      requireInteraction: false,
+    })
+  );
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(

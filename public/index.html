@@ -190,6 +190,47 @@
       } catch (_e) { swReg = null; }
     }
 
+    // VAPID base64url string -> Uint8Array, as required by pushManager.subscribe.
+    function urlBase64ToUint8Array(base64) {
+      const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+      const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(b64);
+      const out = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+      return out;
+    }
+
+    // Subscribe to server Web Push so camera on/off (session start/end) and
+    // bark notifications arrive even when this app is closed. Idempotent: the
+    // server keys subscriptions by endpoint. Requires notification permission
+    // and a granted push manager; silently no-ops if unsupported.
+    let pushSubscribed = false;
+    async function subscribeToPush() {
+      if (pushSubscribed) return;
+      if (!swReg || !('PushManager' in window)) return;
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      try {
+        const keyRes = await fetch('/push/key?secret=' + encodeURIComponent(secret));
+        if (!keyRes.ok) return;
+        const { enabled, key } = await keyRes.json();
+        if (!enabled || !key) return;
+
+        let sub = await swReg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await swReg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key),
+          });
+        }
+        await fetch('/push/subscribe?secret=' + encodeURIComponent(secret), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sub),
+        });
+        pushSubscribed = true;
+      } catch (_e) { /* push unavailable — in-app + local notifications still work */ }
+    }
+
     async function requestNotifPermission() {
       if (!('Notification' in window)) return false;
       if (Notification.permission === 'granted') return true;
@@ -220,7 +261,7 @@
     alertBtn.addEventListener('click', async () => {
       if (!alertsEnabled) {
         const granted = await requestNotifPermission();
-        if (granted) { alertsEnabled = true; }
+        if (granted) { alertsEnabled = true; subscribeToPush(); }
       } else {
         alertsEnabled = false;
       }
@@ -467,7 +508,13 @@
         syncAlertBtn();
         // Auto-request on load if not yet decided, so alerts work immediately.
         if ('Notification' in window && Notification.permission === 'default') {
-          requestNotifPermission().then(syncAlertBtn);
+          requestNotifPermission().then((granted) => {
+            syncAlertBtn();
+            if (granted) subscribeToPush();
+          });
+        } else if ('Notification' in window && Notification.permission === 'granted') {
+          // Already granted (e.g. reopened app) — (re)subscribe for push.
+          subscribeToPush();
         }
       });
       loadIceConfig().then(connectSocket);
