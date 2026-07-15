@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Dog Cam — Viewer</title>
-  <link rel="manifest" href="/manifest.json" />
+  <link rel="manifest" id="manifestLink" href="/manifest.webmanifest" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Dog Cam" />
@@ -127,6 +127,15 @@
     const urlSecret = params.get('secret');
     if (urlSecret) localStorage.setItem('dogcam_secret', urlSecret);
     const secret = urlSecret || localStorage.getItem('dogcam_secret') || '';
+
+    // Point the manifest at a secret-bearing start_url BEFORE the user can
+    // "Add to Home Screen". iOS reads the manifest at install time and uses its
+    // start_url for the icon; baking the secret in is the only thing that
+    // survives into the installed PWA's separate storage context.
+    if (secret) {
+      const link = document.getElementById('manifestLink');
+      if (link) link.href = '/manifest.webmanifest?secret=' + encodeURIComponent(secret);
+    }
 
     async function loadIceConfig() {
       try {

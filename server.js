@@ -325,6 +325,38 @@ const BUILD_STARTED = new Date().toISOString();
 // Parse small JSON bodies (used by the push-subscription endpoints below).
 app.use(express.json({ limit: '16kb' }));
 
+// Dynamic web app manifest. iOS gives an installed home-screen PWA its OWN
+// storage, separate from Safari, so a secret saved to localStorage in Safari
+// does NOT survive "Add to Home Screen". To make the installed app launch
+// authenticated, we bake the secret into start_url here: the page requests
+// /manifest.webmanifest?secret=... and we echo that secret into start_url so
+// the home-screen icon always opens "/?secret=...". Defined BEFORE the static
+// middleware so it wins over any file on disk.
+function sendManifest(req, res) {
+  const secret = typeof req.query.secret === 'string' ? req.query.secret : '';
+  const start = secret ? '/?secret=' + encodeURIComponent(secret) : '/';
+  res.type('application/manifest+json').json({
+    name: 'Dog Cam',
+    short_name: 'Dog Cam',
+    description: 'Live dog monitoring camera viewer',
+    start_url: start,
+    scope: '/',
+    display: 'standalone',
+    background_color: '#000000',
+    theme_color: '#000000',
+    orientation: 'any',
+    icons: [
+      {
+        src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='32' fill='%23000'/%3E%3Ctext x='96' y='130' font-size='110' text-anchor='middle'%3E%F0%9F%90%B6%3C/text%3E%3C/svg%3E",
+        sizes: '192x192',
+        type: 'image/svg+xml',
+      },
+    ],
+  });
+}
+app.get('/manifest.webmanifest', sendManifest);
+app.get('/manifest.json', sendManifest);
+
 // Everything in /public is served statically. index.html (the phone viewer)
 // is served automatically at "/" while camera.html is reached at "/camera.html".
 app.use(express.static(path.join(__dirname, 'public')));
