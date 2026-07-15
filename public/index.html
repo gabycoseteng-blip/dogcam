@@ -135,6 +135,11 @@
     if (secret) {
       const link = document.getElementById('manifestLink');
       if (link) link.href = '/manifest.webmanifest?secret=' + encodeURIComponent(secret);
+      // Also drop a cookie so the server can inject the secret into the
+      // manifest's start_url even if iOS fetches the bare manifest href
+      // (without the query) at Add-to-Home-Screen time. 1-year lifetime.
+      document.cookie = 'dogcam_secret=' + encodeURIComponent(secret) +
+        '; path=/; max-age=31536000; SameSite=Lax';
     }
 
     async function loadIceConfig() {
