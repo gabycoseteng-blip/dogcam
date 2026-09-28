@@ -149,10 +149,26 @@
           const data = await res.json();
           if (data && Array.isArray(data.iceServers) && data.iceServers.length) {
             RTC_CONFIG = { iceServers: data.iceServers };
+            iceConfigLoadedAt = Date.now();
           }
         }
       } catch (_e) {}
     }
+
+    // TURN credentials (e.g. Cloudflare's) are short-lived, but this page can
+    // stay open for days. Re-fetch once the copy we hold is over an hour old so
+    // new connections never use expired relay credentials — which would break
+    // cellular viewing while wifi (direct, no relay) kept working.
+    const ICE_CONFIG_MAX_AGE_MS = 60 * 60 * 1000;
+    let iceConfigLoadedAt = 0;
+    function refreshIceConfigIfStale() {
+      if (Date.now() - iceConfigLoadedAt < ICE_CONFIG_MAX_AGE_MS) return Promise.resolve();
+      return loadIceConfig();
+    }
+    setInterval(refreshIceConfigIfStale, 10 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshIceConfigIfStale();
+    });
 
     let ws = null;
     let myId = null;
